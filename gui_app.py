@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from chrome_op import launch_chrome_with_profile
 from edge_op import launch_edge_with_profile
-from utils import get_all_api_data, google_sheet_check_login  # สมมติมีฟังก์ชันตรวจ login
+from utils import get_all_api_data, google_sheet_check_login
 import threading
 
 profiles = ["Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5"]
@@ -45,15 +45,16 @@ class App(tk.Tk):
     def __init__(self, user_info):
         super().__init__()
         self.title("Browser Profile Launcher & API Loader")
-        self.geometry("450x350")
+        # แก้ไขความสูงของหน้าต่างจาก 350 เป็น 450 หรือ 500
+        self.geometry("450x450") # ปรับเป็น 450x450
         self.resizable(False, False)
         self.user_info = user_info
 
         user_summary = (
             f"User: {self.user_info['Username']}\n"
             f"Role: {self.user_info.get('Role', '-')}\n"
-            f"Max Profiles: {self.user_info.get('Max Profiles', '-')}\n"
-            f"Can Use Scheduler: {self.user_info.get('Can Use Scheduler', '-')}\n"
+            f"Max Profiles: {self.user_info.get('สามาถตั้งจองล่วงหน้าได้กี่ site', '-')}\n"
+            f"Can Use Scheduler: {self.user_info.get('ตั้งจองล่วงหน้าได้ไหม', '-')}\n"
             f"Expiration date: {self.user_info.get('Expiration date', '-')}"
         )
         tk.Label(self, text=user_summary, font=("Arial", 11), justify=tk.LEFT).pack(pady=10)
@@ -98,7 +99,6 @@ class App(tk.Tk):
         confirm = messagebox.askyesno("Logout", "คุณต้องการออกจากระบบใช่หรือไม่?")
         if confirm:
             self.destroy()
-            main()  # เรียกกลับไปหน้า login
 
 class LoginWindow(tk.Tk):
     def __init__(self):
@@ -125,14 +125,16 @@ class LoginWindow(tk.Tk):
             messagebox.showwarning("คำเตือน", "กรุณากรอก Username และ Password")
             return
 
-        # ตรวจสอบข้อมูลจาก google sheet ใน utils.py
         try:
             user_info = google_sheet_check_login(username, password)
         except Exception as e:
             messagebox.showerror("Error", f"เกิดข้อผิดพลาดในการเชื่อมต่อ:\n{e}")
             return
 
-        if not user_info:
+        if user_info == "expired":
+            messagebox.showerror("Error", "บัญชีผู้ใช้หมดอายุแล้ว")
+            return
+        elif not user_info:
             messagebox.showerror("Error", "Username หรือ Password ไม่ถูกต้อง")
             return
 

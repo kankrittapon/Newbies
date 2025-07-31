@@ -1,6 +1,7 @@
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime
 
 # Constants
 API_KEYS = {
@@ -51,3 +52,36 @@ def get_all_api_data():
     for name, key in API_KEYS.items():
         results[name] = fetch_api(key)
     return results
+
+# ส่วนที่เพิ่มเข้ามาสำหรับการจัดการ Google Sheet Login
+SPREADSHEET_KEY = "1rQnV_-30tmb8oYj7g9q6-YdyuWZZ2c8sZ2xH7pqszVk"
+SHEET_NAME = "Users" # เปลี่ยนตามชื่อ sheet จริง
+
+def google_sheet_check_login(username, password):
+    try:
+        client = create_gsheet_client()
+        sheet = open_google_sheet(client, SPREADSHEET_KEY).worksheet(SHEET_NAME)
+        records = sheet.get_all_records()
+        user = None
+        for row in records:
+            # ใช้ .strip() เพื่อลบช่องว่างที่อาจมี
+            if row.get("Username", "").strip() == username and row.get("Password", "").strip() == password:
+                user = row
+                break
+
+        if user is None:
+            return None
+
+        # เช็ควันหมดอายุ (format สมมติ yyyy-mm-dd)
+        exp_date_str = user.get("Expiration date", "")
+        if exp_date_str:
+            try:
+                exp_date = datetime.strptime(exp_date_str, "%Y-%m-%d")
+                if exp_date < datetime.now():
+                    return "expired" # ส่งค่าพิเศษกลับไปเพื่อระบุว่าบัญชีหมดอายุ
+            except ValueError:
+                # ถ้า format วันที่ผิดพลาด ให้ถือว่าไม่หมดอายุ หรือจัดการตามที่ต้องการ
+                pass
+        return user
+    except Exception as e:
+        raise Exception(f"Failed to connect to Google Sheet or check login: {e}")
