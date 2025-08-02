@@ -11,6 +11,9 @@ import traceback
 from real_booking import perform_real_booking, attach_to_chrome
 from playwright_ops import launch_browser_and_perform_booking as trial_booking
 from playwright.async_api import async_playwright
+from Scheduledreal_booking import ScheduledManager
+from utils import get_all_api_data, google_sheet_check_login, setup_config_files
+from Scroll_ import ScrollableFrame
 
 profiles = ["Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5"]
 browsers = ["Chrome", "Edge"]
@@ -314,7 +317,7 @@ class SingleBookingWindow(tk.Tk):
     
     def on_cancel(self):
         self.destroy()
-        LiveModeWindow(user_info=self.user_info).mainloop()
+        LiveModeWindow(user_info=self.user_info, api_data=self.api_data).mainloop()
 
     def on_check_line_login(self):
         messagebox.showinfo("ตรวจสอบการ Login LINE", "ฟังก์ชันตรวจสอบสถานะการ Login LINE")
@@ -363,10 +366,11 @@ class ApiStatusPopup(tk.Tk):
         App(user_info=self.user_info).mainloop()
 
 class LiveModeWindow(tk.Tk):
-    def __init__(self, user_info):
+    def __init__(self, user_info, api_data):  # เพิ่ม api_data เป็นพารามิเตอร์
         print("DEBUG: Creating LiveModeWindow...")
         super().__init__()
         self.user_info = user_info
+        self.api_data = api_data
         self.title("โหมดใช้งานจริง")
         self.geometry("300x200")
         self.resizable(False, False)
@@ -386,31 +390,461 @@ class LiveModeWindow(tk.Tk):
         print("DEBUG: LiveModeWindow created successfully.")
 
     def on_single_booking(self):
-        try:
-            messagebox.showinfo("ข้อมูล API", "กำลังโหลดข้อมูล API... โปรดรอสักครู่")
-            threading.Thread(target=self._load_api_and_open_single_booking_window, daemon=True).start()
-        except Exception as e:
-            messagebox.showerror("Error", f"เกิดข้อผิดพลาดในการเปิดหน้าต่าง: {e}")
-            App(user_info=self.user_info).mainloop()
-    
-    def _load_api_and_open_single_booking_window(self):
-        try:
-            api_data = get_all_api_data()
-            self.after(0, lambda: self._show_single_booking_window_after_load(api_data))
-        except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Error", f"เกิดข้อผิดพลาดในการโหลดข้อมูล API:\n{e}"))
-            self.after(0, App(user_info=self.user_info).mainloop)
-
-    def _show_single_booking_window_after_load(self, api_data):
+        if not self.api_data:
+            messagebox.showerror("Error", "ข้อมูล API ยังไม่พร้อมใช้งาน")
+            return
         self.destroy()
-        SingleBookingWindow(user_info=self.user_info, all_api_data=api_data).mainloop()
+        SingleBookingWindow(user_info=self.user_info, all_api_data=self.api_data).mainloop()
 
     def on_scheduled_booking(self):
-        messagebox.showinfo("จองล่วงหน้า (schedule)", "ฟังก์ชันสำหรับตั้งค่าการจองล่วงหน้า")
+        can_use_scheduler = self.user_info.get('ตั้งจองล่วงหน้าได้ไหม', 'ไม่') == 'ใช่'
+        if not can_use_scheduler:
+            messagebox.showerror("ข้อผิดพลาด", "คุณไม่มีสิทธิ์ในการเข้าใช้งานโหมดจองล่วงหน้า")
+            return
+
+        if not self.api_data:
+            messagebox.showerror("Error", "ข้อมูล API ยังไม่พร้อมใช้งาน")
+            return
+
+        self.destroy()
+        ScheduledBookingWindow(user_info=self.user_info, all_api_data=self.api_data).mainloop()
+    def on_cancel(self):
+        self.destroy()
+        App(user_info=self.user_info, api_data=self.api_data).mainloop()
+
+class ScheduledBookingWindow(tk.Tk):
+    def __init__(self, user_info, all_api_data):
+        super().__init__()
+        self.user_info = user_info
+        self.all_api_data = all_api_data
+        self.title("จองล่วงหน้า (schedule)")
+        self.geometry("1000x750")
+        self.resizable(True, True)
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        max_scheduled = int(self.user_info.get('สามาถตั้งจองล่วงหน้าได้กี่ site', 0))
+        # ตัวจัดการ Task จองล่วงหน้า
+        self.manager = ScheduledManager(all_api_data=self.all_api_data, progress_callback=self.update_status)
+            # สร้าง ScrollableFrame และแพ็คเต็มหน้าต่าง
+        self.scrollable = ScrollableFrame(self)
+        self.scrollable.pack(fill="both", expand=True)
+        main_frame = self.scrollable.scrollable_frame
+        tk.Label(main_frame, text=f"ตั้งค่าการจองล่วงหน้า (สูงสุด {max_scheduled} รายการ)", font=("Arial", 16, "bold")).pack(pady=(0, 10))
+
+        # เฟรมสำหรับเพิ่ม Task ใหม่
+        control_frame = ttk.LabelFrame(main_frame, text="เพิ่มการจองใหม่", padding=(10, 5))
+        control_frame.pack(fill="x", pady=10)
+
+        # ตัวแปรเก็บค่าจาก input ต่างๆ
+        self.site_var = tk.StringVar(value=LIVE_SITES[0])
+        self.browser_var = tk.StringVar(value=browsers[0])
+        self.profile_var = tk.StringVar(value=profiles[0])
+        self.branch_var = tk.StringVar()
+        self.day_var = tk.StringVar(value=days[0])
+        self.time_var = tk.StringVar()
+        self.line_email_var = tk.StringVar()
+        # ลบ self.line_password_var ออก
+
+        # ส่วน dropdown และ label
+        ttk.Label(control_frame, text="Site:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        ttk.Combobox(control_frame, values=LIVE_SITES, textvariable=self.site_var, state="readonly").grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(control_frame, text="Browser:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        ttk.Combobox(control_frame, values=browsers, textvariable=self.browser_var, state="readonly").grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(control_frame, text="Profile:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        ttk.Combobox(control_frame, values=profiles[:max_scheduled], textvariable=self.profile_var, state="readonly").grid(row=1, column=1, padx=5, pady=5)
+
+        ttk.Label(control_frame, text="Branch:").grid(row=1, column=2, padx=5, pady=5, sticky="w")
+        self.branch_combo = ttk.Combobox(control_frame, textvariable=self.branch_var, state="readonly")
+        self.branch_combo.grid(row=1, column=3, padx=5, pady=5)
+
+        ttk.Label(control_frame, text="Day:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        ttk.Combobox(control_frame, values=days, textvariable=self.day_var, state="readonly").grid(row=2, column=1, padx=5, pady=5)
+
+        ttk.Label(control_frame, text="Time:").grid(row=2, column=2, padx=5, pady=5, sticky="w")
+        self.time_combo = ttk.Combobox(control_frame, textvariable=self.time_var, state="readonly")
+        self.time_combo.grid(row=2, column=3, padx=5, pady=5)
+
+        # แก้ไข UI: เปลี่ยนจาก Entry เป็น Combobox สำหรับ LINE Email
+        #ttk.Label(control_frame, text="LINE Email:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
+        #self.line_email_combo = ttk.Combobox(control_frame, textvariable=self.line_email_var, state="readonly")
+        #self.line_email_combo.grid(row=3, column=1, padx=5, pady=5)
+        # ลบ Label และ Entry สำหรับ LINE Password ออกไป
+        ttk.Label(control_frame, text="LINE Email:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
+        self.line_email_combo = ttk.Combobox(control_frame, textvariable=self.line_email_var, state="readonly")
+        self.line_email_combo.grid(row=3, column=1, padx=5, pady=5)
+        
+        add_btn = ttk.Button(control_frame, text="เพิ่ม Task", command=self.add_task)
+        add_btn.grid(row=4, column=0, columnspan=4, padx=5, pady=5, sticky="we")
+
+        # ส่วนแสดงรายการ Task ที่ตั้งไว้
+        list_frame = ttk.LabelFrame(main_frame, text="รายการจองที่ตั้งเวลาไว้", padding=(10, 5))
+        list_frame.pack(fill="both", expand=True, pady=10)
+
+        self.task_tree = ttk.Treeview(list_frame, columns=("TaskID", "Site", "Branch", "Day", "Time", "Profile", "LINE Email", "Status"), show="headings")
+        self.task_tree.heading("TaskID", text="ID", anchor="w")
+        self.task_tree.column("TaskID", width=80)
+        self.task_tree.heading("Site", text="Site", anchor="w")
+        self.task_tree.column("Site", width=100)
+        self.task_tree.heading("Branch", text="Branch", anchor="w")
+        self.task_tree.column("Branch", width=150)
+        self.task_tree.heading("Day", text="Day", anchor="w")
+        self.task_tree.column("Day", width=50)
+        self.task_tree.heading("Time", text="Time", anchor="w")
+        self.task_tree.column("Time", width=80)
+        self.task_tree.heading("Profile", text="Profile", anchor="w")
+        self.task_tree.column("Profile", width=100)
+        self.task_tree.heading("LINE Email", text="LINE Email", anchor="w")
+        self.task_tree.column("LINE Email", width=200)
+        self.task_tree.heading("Status", text="Status", anchor="w")
+        self.task_tree.column("Status", width=100)
+        self.task_tree.pack(fill="both", expand=True)
+
+        # ปุ่มควบคุม Task
+        task_control_frame = ttk.Frame(list_frame)
+        task_control_frame.pack(pady=5)
+        ttk.Button(task_control_frame, text="ลบ", command=self.remove_task).pack(side=tk.LEFT, padx=5)
+        ttk.Button(task_control_frame, text="แก้ไข", command=self.edit_task).pack(side=tk.LEFT, padx=5)
+        ttk.Button(task_control_frame, text="ล้างทั้งหมด", command=self.clear_all_tasks).pack(side=tk.LEFT, padx=5)
+
+        # ปุ่มควบคุม Line Credentials
+        line_cred_frame = ttk.Frame(list_frame)
+        line_cred_frame.pack(pady=5)
+        ttk.Button(line_cred_frame, text="เพิ่ม/แก้ไข LINE Credentials", command=self.add_line_credentials).pack(side=tk.LEFT, padx=5)
+    
+        # เพิ่ม Label และ Combobox สำหรับเลือก LINE Email ที่จะลบ
+        ttk.Label(line_cred_frame, text="เลือก LINE Email ที่จะลบ:").pack(side=tk.LEFT, padx=5)
+        self.line_email_remove_var = tk.StringVar()
+        self.line_email_remove_combo = ttk.Combobox(line_cred_frame, textvariable=self.line_email_remove_var, state="readonly")
+        self.line_email_remove_combo.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(line_cred_frame, text="ลบ (LINE)", command=self.remove_line_credentials).pack(side=tk.LEFT, padx=5)
+        
+        # ส่วนแสดงสถานะการทำงาน
+        status_frame = ttk.LabelFrame(main_frame, text="สถานะการทำงาน", padding=(10, 5))
+        status_frame.pack(fill="x", pady=10)
+
+        self.status_text = tk.Text(status_frame, wrap="word", font=("Arial", 11), height=5)
+        self.status_text.pack(fill="both", expand=True)
+        self.status_text.config(state=tk.DISABLED)
+
+        # ปุ่มควบคุม Scheduler
+        overall_control_frame = ttk.Frame(main_frame)
+        overall_control_frame.pack(pady=10)
+
+        self.start_btn = ttk.Button(overall_control_frame, text="เริ่ม Scheduler", command=self.start_scheduler)
+        self.start_btn.pack(side=tk.LEFT, padx=5)
+
+        self.stop_btn = ttk.Button(overall_control_frame, text="หยุด Scheduler ทั้งหมด", command=self.stop_scheduler, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(overall_control_frame, text="ย้อนกลับ", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
+
+        self.update_combobox_data()
+        self.update_line_email_choices()
+        self.update_line_email_remove_choices()
+        self.refresh_task_list()
+
+    def update_combobox_data(self):
+        branches = self.all_api_data.get("branchs", [])
+        times = self.all_api_data.get("times", [])
+
+        self.branch_combo['values'] = branches
+        if branches:
+            self.branch_var.set(branches[0])
+
+        self.time_combo['values'] = times
+        if times:
+            self.time_var.set(times[0])
+
+    def update_line_email_choices(self):
+        line_data = self.manager.load_line_credentials()
+        email_list = list(line_data.keys())
+        self.line_email_combo['values'] = email_list
+        if email_list:
+            self.line_email_var.set(email_list[0])
+        else:
+            self.line_email_var.set("")
+
+    def update_line_email_remove_choices(self):
+        line_data = self.manager.load_line_credentials()
+        email_list = list(line_data.keys())
+        self.line_email_remove_combo['values'] = email_list
+        if email_list:
+            self.line_email_remove_var.set(email_list[0])
+        else:
+            self.line_email_remove_var.set("")
+
+    def update_status(self, message):
+        def inner():
+            if not self.winfo_exists():
+            # ถ้าหน้าต่างถูกปิดไปแล้ว ไม่ต้องทำอะไร
+                return
+            self.status_text.config(state=tk.NORMAL)
+            self.status_text.insert(tk.END, message + "\n")
+            self.status_text.see(tk.END)
+            self.status_text.config(state=tk.DISABLED)
+            self.refresh_task_list()
+        self.after(0, inner)
+
+    def refresh_task_list(self):
+        self.task_tree.delete(*self.task_tree.get_children())
+        for task in self.manager.tasks:
+            task_data = task.task_data
+            self.task_tree.insert("", "end", iid=task.id,
+                                  values=(task.id[:4], task_data.get('site_name', '-'), task_data.get('selected_branch', '-'),
+                                          task_data.get('selected_day', '-'), task_data.get('selected_time', '-'),
+                                          task_data.get('profile', '-'), task_data.get('line_email', '-'), task.status))
+
+    def add_task(self):
+        max_scheduled = int(self.user_info.get('สามาถตั้งจองล่วงหน้าได้กี่ site', 0))
+        if len(self.manager.tasks) >= max_scheduled:
+            messagebox.showwarning("คำเตือน", f"คุณเพิ่ม Task ได้สูงสุดเพียง {max_scheduled} รายการเท่านั้น")
+            return
+
+        # แก้ไข: ตรวจสอบว่าเลือก LINE Email แล้วหรือไม่
+        selected_line_email = self.line_email_var.get()
+
+        if not selected_line_email:
+            messagebox.showwarning("คำเตือน", "กรุณาเลือก LINE Email")
+            return
+        used_emails = [t.task_data.get('line_email') for t in self.manager.tasks]
+        if selected_line_email in used_emails:
+            messagebox.showwarning("คำเตือน", "LINE Email นี้ถูกใช้ใน Task อื่นแล้ว")
+            return
+            
+        line_data = self.manager.load_line_credentials()
+        line_password = line_data.get(selected_line_email)
+        if not line_password:
+            messagebox.showwarning("คำเตือน", "ไม่พบ Password สำหรับ LINE Email ที่เลือก")
+            return
+
+        task_data = {
+            "site_name": self.site_var.get(),
+            "browser_type": self.browser_var.get(),
+            "profile": self.profile_var.get(),
+            "selected_branch": self.branch_var.get(),
+            "selected_day": self.day_var.get(),
+            "selected_time": self.time_var.get(),
+            "line_email": selected_line_email,
+            "line_password": line_password
+        }
+
+        # แก้ไข: ตรวจสอบเฉพาะข้อมูลที่จำเป็น
+        if not all([task_data.get('site_name'), task_data.get('browser_type'), task_data.get('profile'),
+                    task_data.get('selected_branch'), task_data.get('selected_day'),
+                    task_data.get('selected_time')]):
+            messagebox.showwarning("คำเตือน", "กรุณากรอกข้อมูลให้ครบถ้วน")
+            return
+
+        self.manager.add_booking(task_data)
+        self.refresh_task_list()
+
+    def remove_task(self):
+        selected_item = self.task_tree.focus()
+        print(f"DEBUG: Selected item is '{selected_item}'")
+        if not selected_item:
+            messagebox.showwarning("คำเตือน", "กรุณาเลือก Task ที่ต้องการลบ")
+            return
+
+        task_id = selected_item
+        print(f"DEBUG: Task ID is '{task_id}'")
+        self.manager.remove_booking(task_id)
+        self.refresh_task_list()
+
+    def edit_task(self):
+        selected_item = self.task_tree.focus()
+        if not selected_item:
+            messagebox.showwarning("คำเตือน", "กรุณาเลือก Task ที่ต้องการแก้ไข")
+            return
+
+        task_id = selected_item
+        task = next((t for t in self.manager.tasks if t.id == task_id), None)
+        if not task:
+            messagebox.showwarning("คำเตือน", "ไม่พบ Task ที่เลือก")
+            return
+
+        self.site_var.set(task.task_data.get('site_name', ''))
+        self.browser_var.set(task.task_data.get('browser_type', ''))
+        self.profile_var.set(task.task_data.get('profile', ''))
+        self.branch_var.set(task.task_data.get('selected_branch', ''))
+        self.day_var.set(task.task_data.get('selected_day', ''))
+        self.time_var.set(task.task_data.get('selected_time', ''))
+        self.line_email_var.set(task.task_data.get('line_email', ''))
+
+        self.manager.remove_booking(task_id)
+        self.refresh_task_list()
+        messagebox.showinfo("สถานะ", "ข้อมูลถูกย้ายไปที่ช่องกรอกด้านบนแล้ว กรุณากด 'เพิ่ม Task' เพื่อบันทึก")
+    
+    def add_line_credentials(self):
+        win = LineCredentialsWindow(manager=self.manager)
+        self.wait_window(win)
+        self.update_line_email_choices()
+
+    def remove_line_credentials(self):
+        selected_email = self.line_email_remove_var.get()
+        if not selected_email:
+            messagebox.showwarning("คำเตือน", "กรุณาเลือกบัญชี LINE ที่ต้องการลบ")
+            return
+    
+        confirm = messagebox.askyesno("ยืนยันการลบ", f"คุณต้องการลบบัญชี LINE '{selected_email}' ใช่หรือไม่?")
+        if confirm:
+            self.manager.remove_line_credentials_by_email(selected_email)
+            self.refresh_task_list()
+            self.update_line_email_choices()
+            self.line_email_remove_var.set("")  # เคลียร์ selection
+            messagebox.showinfo("สถานะ", f"ลบบัญชี LINE '{selected_email}' เรียบร้อยแล้ว")   
+   
+    def clear_all_tasks(self):
+        confirm = messagebox.askyesno("ยืนยัน", "คุณต้องการล้าง Task ทั้งหมดใช่หรือไม่?")
+        if confirm:
+            self.manager.clear_all_tasks()
+            self.refresh_task_list()
+
+    def start_scheduler(self):
+        self.manager.start_scheduler()
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+
+    def stop_scheduler(self):
+        self.manager.stop_scheduler()
+        self.start_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
+
+    def on_cancel(self):
+        self.manager.stop_scheduler()
+        self.destroy()
+        LiveModeWindow(user_info=self.user_info, api_data=self.api_data).mainloop()
+        # เรียก LiveModeWindow หรือหน้าหลักอื่น ๆ ต่อไป
+
+class LineCredentialsWindow(tk.Tk):
+    def __init__(self, manager):
+        super().__init__()
+        self.manager = manager
+        self.title("ตั้งค่า LINE Credentials")
+        self.geometry("500x350")
+        self.resizable(False, False)
+
+        # โหลดข้อมูลจากไฟล์เดียว
+        self.line_data = self.manager.load_line_credentials()
+
+        main_frame = ttk.Frame(self, padding=(10, 10))
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        input_frame = ttk.LabelFrame(main_frame, text="เพิ่ม/แก้ไขบัญชี LINE", padding=(10, 5))
+        input_frame.pack(fill="x", pady=5)
+
+        ttk.Label(input_frame, text="LINE Email:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.email_var = tk.StringVar()
+        self.email_entry = ttk.Entry(input_frame, textvariable=self.email_var, width=30)
+        self.email_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(input_frame, text="LINE Password:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.password_var = tk.StringVar()
+        self.password_entry = ttk.Entry(input_frame, textvariable=self.password_var, show="*", width=30)
+        self.password_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        button_frame = ttk.Frame(input_frame)
+        button_frame.grid(row=2, column=0, columnspan=2, pady=10)
+
+        save_btn = ttk.Button(button_frame, text="บันทึก", command=self.on_save)
+        save_btn.pack(side=tk.LEFT, padx=5)
+
+        clear_btn = ttk.Button(button_frame, text="ล้างข้อมูล", command=self.on_clear_input)
+        clear_btn.pack(side=tk.LEFT, padx=5)
+
+        list_frame = ttk.LabelFrame(main_frame, text="รายการบัญชีที่บันทึกไว้", padding=(10, 5))
+        list_frame.pack(fill="both", expand=True, pady=5)
+
+        self.cred_tree = ttk.Treeview(list_frame, columns=("Email",), show="headings")
+        self.cred_tree.heading("Email", text="LINE Email")
+        self.cred_tree.column("Email", width=400)
+        self.cred_tree.pack(fill="both", expand=True, padx=5, pady=5)
+        self.cred_tree.bind("<Double-1>", self.on_double_click)
+
+        self.refresh_cred_list()
+
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(pady=10)
+
+        load_btn = ttk.Button(control_frame, text="โหลดข้อมูล", command=self.on_load)
+        load_btn.pack(side=tk.LEFT, padx=5)
+
+        delete_btn = ttk.Button(control_frame, text="ลบที่เลือก", command=self.on_delete)
+        delete_btn.pack(side=tk.LEFT, padx=5)
+
+        back_btn = ttk.Button(control_frame, text="ย้อนกลับ", command=self.on_cancel)
+        back_btn.pack(side=tk.LEFT, padx=5)
+        done_btn = ttk.Button(control_frame, text="เสร็จสิ้น", command=self.on_done)
+        done_btn.pack(side=tk.LEFT, padx=5)
+
+    def refresh_cred_list(self):
+        self.cred_tree.delete(*self.cred_tree.get_children())
+        for email in self.line_data.keys():
+            self.cred_tree.insert("", "end", iid=email, values=(email,))
+    
+    def on_save(self):
+        # แก้ไข: ดึงค่าจาก Entry widget โดยตรงแทน StringVar
+        email = self.email_entry.get().strip()
+        password = self.password_entry.get().strip()
+
+        # แก้ไขโค้ดส่วนนี้ให้รัดกุมขึ้นอีกนิด
+        if not email:
+            messagebox.showwarning("คำเตือน", "กรุณากรอก Email ให้ครบถ้วน")
+            return
+        
+        if not password:
+            messagebox.showwarning("คำเตือน", "กรุณากรอก Password ให้ครบถ้วน")
+            return
+            
+        self.line_data[email] = password
+        self.manager.save_line_credentials(self.line_data)
+        messagebox.showinfo("สถานะ", "บันทึก LINE Credentials เรียบร้อยแล้ว")
+        self.refresh_cred_list()
+        self.on_clear_input()
+        if hasattr(self.manager, "update_line_email_choices"):
+            self.manager.update_line_email_choices()
+
+    def on_clear_input(self):
+        self.email_var.set("")
+        self.password_var.set("")
+
+    def on_delete(self):
+        selected = self.cred_tree.focus()
+        if not selected:
+            messagebox.showwarning("คำเตือน", "กรุณาเลือกบัญชีที่ต้องการลบ")
+            return
+
+        confirm = messagebox.askyesno("ยืนยันการลบ", f"คุณต้องการลบบัญชี {selected} ใช่หรือไม่?")
+        if confirm:
+            if selected in self.line_data:
+                del self.line_data[selected]
+            self.manager.save_line_credentials(self.line_data)
+            self.refresh_cred_list()
+            messagebox.showinfo("สถานะ", "ลบ LINE Credentials เรียบร้อยแล้ว")
+            
+            if hasattr(self.manager, "update_line_email_choices"):
+                self.manager.update_line_email_choices()
+
+    def on_load(self):
+        self.line_data = self.manager.load_line_credentials()
+        self.refresh_cred_list()
+        messagebox.showinfo("สถานะ", "โหลดข้อมูลใหม่เรียบร้อยแล้ว")
+
+    def on_double_click(self, event):
+        selected = self.cred_tree.focus()
+        if not selected:
+            return
+        # แก้ไข: ใช้ set() ของ StringVar เพื่ออัปเดตค่าใน Entry
+        self.email_var.set(selected)
+        self.password_var.set(self.line_data.get(selected, ""))
 
     def on_cancel(self):
         self.destroy()
-        App(user_info=self.user_info).mainloop()
+    def on_done(self):
+        if hasattr(self.manager, "update_line_email_choices"):
+            self.manager.update_line_email_choices()
+        self.destroy()
 
 class TrialModeWindow(tk.Tk):
     def __init__(self, all_api_data, user_info):
@@ -584,7 +1018,9 @@ class App(tk.Tk):
 
     def _load_api_data_in_background(self):
         try:
+            # โหลดข้อมูลหนัก ๆ ใน thread นี้
             self.api_data = get_all_api_data()
+            # อัพเดต UI โดยเรียก self.after ใน main thread
             self.after(0, self._on_api_data_loaded_successfully)
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Error", f"ไม่สามารถโหลดข้อมูล API ได้:\n{e}"))
@@ -632,7 +1068,7 @@ class App(tk.Tk):
         
         try:
             self.destroy()
-            LiveModeWindow(user_info=self.user_info).mainloop()
+            LiveModeWindow(user_info=self.user_info, api_data=self.api_data).mainloop()
         except Exception as e:
             traceback.print_exc()
             messagebox.showerror("Error", f"เกิดข้อผิดพลาดในการเปิดหน้าต่าง: {e}")
@@ -655,6 +1091,7 @@ class App(tk.Tk):
         confirm = messagebox.askyesno("Logout", "คุณต้องการออกจากระบบใช่หรือไม่?")
         if confirm:
             self.destroy()
+            LoginWindow().mainloop()
 
 class LoginWindow(tk.Tk):
     def __init__(self):
@@ -700,6 +1137,7 @@ class LoginWindow(tk.Tk):
         app.mainloop()
 
 def main():
+    setup_config_files() 
     login_win = LoginWindow()
     login_win.mainloop()
 

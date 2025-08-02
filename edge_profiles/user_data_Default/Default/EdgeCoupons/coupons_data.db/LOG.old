@@ -1,6 +1,0 @@
-2025/08/01-23:35:08.411 3738 Reusing MANIFEST C:\Newbies\edge_profiles\user_data_Default\Default\EdgeCoupons/coupons_data.db/MANIFEST-000001
-2025/08/01-23:35:08.412 3738 Recovering log #10
-2025/08/01-23:35:08.412 3738 Reusing old log C:\Newbies\edge_profiles\user_data_Default\Default\EdgeCoupons/coupons_data.db/000010.log 
-2025/08/01-23:35:08.458 76c0 Level-0 table #14: started
-2025/08/01-23:35:08.462 76c0 Level-0 table #14: 672104 bytes OK
-2025/08/01-23:35:08.466 76c0 Delete type=0 #10

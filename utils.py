@@ -1,7 +1,11 @@
+# utils.py
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import os
+import json
+from pathlib import Path
 
 # Constants
 API_KEYS = {
@@ -85,3 +89,34 @@ def google_sheet_check_login(username, password):
         return user
     except Exception as e:
         raise Exception(f"Failed to connect to Google Sheet or check login: {e}")
+
+def setup_config_files():
+    """
+    ตรวจสอบและสร้างโฟลเดอร์ BokkChoYCompany และไฟล์ config ที่จำเป็น
+    ถ้ายังไม่มีอยู่
+    """
+    appdata_path = os.environ.get('APPDATA')
+    if not appdata_path:
+        print("ไม่พบ AppData path. ไม่สามารถสร้าง config ได้")
+        return
+
+    company_dir = Path(appdata_path) / "BokkChoYCompany"
+    
+    if not company_dir.exists():
+        print(f"กำลังสร้างโฟลเดอร์: {company_dir}")
+        os.makedirs(company_dir)
+    
+    # แก้ไขตรงนี้: สร้างแค่ไฟล์ line_data.json และ scheduled_tasks.json
+    files_to_check = {
+        "line_data.json": {}, 
+        "scheduled_tasks.json": []
+    }
+    
+    for filename, default_content in files_to_check.items():
+        file_path = company_dir / filename
+        if not file_path.exists():
+            print(f"กำลังสร้างไฟล์: {file_path}")
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(default_content, f, indent=4, ensure_ascii=False)
+                
+    print("ตั้งค่าไฟล์ config สำเร็จ")
