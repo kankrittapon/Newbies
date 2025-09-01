@@ -9,9 +9,67 @@ import threading
 import time
 from pathlib import Path
 
+# ---------- Lightweight config loader (.env + config.json) ----------
+def _company_dir_early() -> Path:
+    appdata_path = os.environ.get('APPDATA')
+    return Path(appdata_path) / "BokkChoYCompany" if appdata_path else Path.cwd()
+
+
+def _read_env_file(path: Path) -> dict:
+    data: dict[str, str] = {}
+    try:
+        if not path.exists():
+            return data
+        for line in path.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if not s or s.startswith('#'):
+                continue
+            if '=' not in s:
+                continue
+            k, v = s.split('=', 1)
+            data[k].strip() if False else None  # keep type checker quiet
+            data[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return data
+
+
+def _load_env_from_files() -> None:
+    # Load from .env in CWD then AppData folder, without overriding existing env
+    for p in [Path.cwd() / ".env", _company_dir_early() / ".env"]:
+        try:
+            envmap = _read_env_file(p)
+            for k, v in envmap.items():
+                if k and (os.getenv(k) is None):
+                    os.environ[k] = v
+        except Exception:
+            pass
+
+
+def _load_config_overrides() -> dict:
+    # Optional JSON config in AppData: {"API_TOKEN": "...", "SPREADSHEET_KEY": "..."}
+    try:
+        cfg_path = _company_dir_early() / "config.json"
+        if cfg_path.exists():
+            with open(cfg_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+
+_load_env_from_files()
+_CONFIG_OVERRIDES = _load_config_overrides()
+
 # Constants (sanitized: read from env, no hardcoded secrets)
 def _env(name: str, default: str = "") -> str:
-    return os.getenv(name, default)
+    v = os.getenv(name)
+    if v is not None and v != "":
+        return v
+    if name in _CONFIG_OVERRIDES and str(_CONFIG_OVERRIDES[name]).strip():
+        return str(_CONFIG_OVERRIDES[name]).strip()
+    return default
 
 API_KEYS = {
     "branchs": _env("API_KEY_BRANCHS"),
