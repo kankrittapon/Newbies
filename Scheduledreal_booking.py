@@ -62,8 +62,13 @@ class BookingTask:
                 selected_day=self.task_data.get('selected_day'),
                 selected_time=self.task_data.get('selected_time'),
                 register_by_user=False,
-                confirm_by_user=False,
-                progress_callback=progress_callback
+                confirm_by_user=self.task_data.get('confirm_by_user', False),
+                progress_callback=progress_callback,
+                round_index=self.task_data.get('round_index'),
+                timer_seconds=self.task_data.get('timer_seconds'),
+                delay_seconds=self.task_data.get('delay_seconds'),
+                line_email=self.task_data.get('line_email'),
+                user_profile_name=self.task_data.get('user_profile_name')
             )
             progress_callback(f"✅ Task [{self.id[:4]}] - การจองเสร็จสิ้น!")
             self.status = "completed"
@@ -132,7 +137,7 @@ class ScheduledManager:
 
     @staticmethod
     def _get_app_data_path():
-        # เมธอดนี้ไม่ต้องแก้ไข
+        """คืนพาธโฟลเดอร์เก็บ config ที่รับประกันว่ามีอยู่จริง"""
         if sys.platform.startswith("win"):
             app_data = os.environ.get('APPDATA')
             if app_data:
@@ -141,40 +146,151 @@ class ScheduledManager:
                 path.mkdir(parents=True, exist_ok=True)
                 return path
         path = Path.home() / ".BokkChoYCompany"
-        print(f"HOME path (Non-Windows): {path}") 
+        print(f"HOME path (Non-Windows): {path}")
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def save_line_credentials(self, data):
-        """บันทึกข้อมูล Line Credentials ทั้งหมดลงในไฟล์เดียว"""
+        """บันทึกข้อมูล Line Credentials เป็นรูปแบบ list ของออบเจ็กต์ พร้อม id auto-increment
+        - data: dict {email: password}
+        - ถ้ามีไฟล์อยู่แล้วและเป็น list จะคง id เดิมของอีเมลเดิม และเพิ่ม id ใหม่ให้รายการใหม่
+        """
+        existing = []
+        try:
+            with open(self.line_data_path, 'r', encoding='utf-8') as f:
+                old = json.load(f)
+            if isinstance(old, list):
+                existing = [x for x in old if isinstance(x, dict)]
+            elif isinstance(old, dict):
+                # รองรับรูปแบบเก่า dict -> แปลงเป็น list เบื้องต้น
+                for i, (em, pw) in enumerate(old.items(), start=1):
+                    existing.append({"id": i, "Email": em, "Password": pw})
+        except Exception:
+            existing = []
+        # ทำแผนที่ email -> entry
+        by_email = {}
+        max_id = 0
+        for item in existing:
+            em = (item.get("Email") or item.get("email") or "").strip()
+            if not em:
+                continue
+            by_email[em] = item
+            try:
+                max_id = max(max_id, int(item.get("id") or 0))
+            except Exception:
+                pass
+
+        # อัปเดต/เพิ่มจาก data
+        for em, pw in (data or {}).items():
+            em_s = (em or "").strip()
+            pw_s = (pw or "").strip()
+            if not em_s:
+                continue
+            if em_s in by_email:
+                by_email[em_s]["Password"] = pw_s
+            else:
+                max_id += 1
+                by_email[em_s] = {"id": max_id, "Email": em_s, "Password": pw_s}
+
+        # เรียงตาม id ก่อนเขียนกลับ
+        new_list = sorted(by_email.values(), key=lambda x: int(x.get("id") or 0))
         with open(self.line_data_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+            json.dump(new_list, f, indent=4, ensure_ascii=False)
         self.progress_callback("✅ บันทึก Line Credentials เรียบร้อยแล้ว")
         print("File saved successfully.")
 
+    def write_full_line_credentials(self, mapping: dict):
+        """เขียนทับไฟล์ line_data.json ด้วยรายการทั้งหมดจาก mapping {email: password}
+        - ใช้รูปแบบ list ของออบเจ็กต์พร้อม id รันต่อเนื่องใหม่
+        - ลบรายการเก่าที่ไม่มีใน mapping ออกทั้งหมด
+        """
+        try:
+            new_list = []
+            i = 0
+            # เขียนเรียงตามอีเมลเพื่อความคงที่ของไฟล์
+            for em in sorted((mapping or {}).keys(), key=lambda s: s.lower()):
+                pw = (mapping.get(em) or "").strip()
+                em_s = (em or "").strip()
+                if not em_s:
+                    continue
+                i += 1
+                new_list.append({"id": i, "Email": em_s, "Password": pw})
+            with open(self.line_data_path, 'w', encoding='utf-8') as f:
+                json.dump(new_list, f, indent=4, ensure_ascii=False)
+            self.progress_callback("✅ บันทึก/ปรับปรุง LINE Credentials สำเร็จ (เขียนทับทั้งหมด)")
+        except Exception as e:
+            self.progress_callback(f"❌ บันทึก LINE Credentials ไม่สำเร็จ: {e}")
+            raise
+
     def remove_line_credentials_by_email(self, email):
-        path = self.line_data_path  # ใช้ path เดียวกับตอน save/load
-        if not os.path.exists(path):
-            return
-
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        if email in data:
-            del data[email]
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-            self.progress_callback(f"🗑️ ลบบัญชี LINE: {email} สำเร็จแล้ว")
-        else:
-            self.progress_callback(f"⚠️ ไม่พบบัญชี LINE: {email} ที่จะลบ")
+        """ลบรายการตามอีเมล รองรับทั้งไฟล์รูปแบบ list และ dict เก่า"""
+        try:
+            if not self.line_data_path.exists():
+                return
+            with open(self.line_data_path, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+            changed = False
+            # รูปแบบใหม่: list ของออบเจ็กต์
+            if isinstance(raw, list):
+                new_list = []
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    em = (item.get("Email") or item.get("email") or "").strip()
+                    if em and em.lower() == str(email).strip().lower():
+                        changed = True
+                        continue
+                    new_list.append(item)
+                if changed:
+                    with open(self.line_data_path, 'w', encoding='utf-8') as f:
+                        json.dump(new_list, f, indent=4, ensure_ascii=False)
+            # รูปแบบเก่า: dict
+            elif isinstance(raw, dict):
+                if email in raw:
+                    del raw[email]
+                    changed = True
+                    with open(self.line_data_path, 'w', encoding='utf-8') as f:
+                        json.dump(raw, f, indent=4, ensure_ascii=False)
+            if changed:
+                self.progress_callback(f"🗑️ ลบบัญชี LINE: {email} สำเร็จแล้ว")
+            else:
+                self.progress_callback(f"⚠️ ไม่พบบัญชี LINE: {email} ที่จะลบ")
+        except Exception as e:
+            self.progress_callback(f"❌ ลบไม่สำเร็จ: {e}")
+            raise
     
     def load_line_credentials(self):
         """โหลดข้อมูล Line Credentials ทั้งหมดจากไฟล์เดียว"""
         try:
             with open(self.line_data_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                raw = json.load(f)
+            # รูปแบบใหม่ list ของออบเจ็กต์
+            if isinstance(raw, list):
+                result = {}
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    em = (item.get("Email") or item.get("email") or "").strip()
+                    pw = (item.get("Password") or item.get("password") or "").strip()
+                    if em and pw:
+                        result[em] = pw
+                self.progress_callback("✅ โหลด Line Credentials เรียบร้อยแล้ว")
+                return result
+            # รูปแบบเก่า dict Email/Password
+            if isinstance(raw, dict) and ("Email" in raw or "email" in raw) and ("Password" in raw or "password" in raw):
+                email = raw.get("Email") or raw.get("email")
+                password = raw.get("Password") or raw.get("password")
+                data = {email: password} if email and password else {}
+                with open(self.line_data_path, 'w', encoding='utf-8') as fw:
+                    json.dump([{"id": 1, "Email": email, "Password": password}], fw, ensure_ascii=False, indent=4)
+                self.progress_callback("✅ โหลด Line Credentials เรียบร้อยแล้ว")
+                return data
+            # รูปแบบ dict {email: password}
+            if isinstance(raw, dict):
+                self.progress_callback("✅ โหลด Line Credentials เรียบร้อยแล้ว")
+                return raw
             self.progress_callback("✅ โหลด Line Credentials เรียบร้อยแล้ว")
-            return data
+            return {}
         except FileNotFoundError:
             self.progress_callback("ℹ️ ไม่พบไฟล์ Line Credentials")
             return {}

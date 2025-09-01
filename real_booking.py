@@ -4,6 +4,8 @@ from datetime import datetime
 import requests
 from playwright.async_api import async_playwright, Page, TimeoutError as PlaywrightTimeoutError
 from bot_check import solve_bot_challenge
+from minigame import solve_minigame
+from line_login import perform_line_login
 
 # URLs สำหรับโหมดใช้งานจริง
 ROCKETBOOKING_URL = "https://popmartth.rocket-booking.app/booking"
@@ -92,14 +94,26 @@ async def safe_wait_for_selector(page: Page, selector: str, bot_elements: dict, 
 async def perform_real_booking(page: Page, all_api_data: dict,
                                site_name: str, selected_branch: str, selected_day: str,
                                selected_time: str, register_by_user: bool,
-                               confirm_by_user: bool, progress_callback=None):
+                               confirm_by_user: bool, progress_callback=None,
+                               round_index: int | None = None,
+                               timer_seconds: float | None = None,
+                               delay_seconds: float | None = None,
+                               line_email: str | None = None,
+                               user_profile_name: str | None = None):
     
     if site_name != "ROCKETBOOKING":
         if progress_callback:
             progress_callback(f"❌ โหมดใช้งานจริงรองรับแค่ ROCKETBOOKING แต่ได้รับ Site: {site_name}")
         return
         
-    web_elements = all_api_data.get("rocketbooking", {}).get("pmrocket", {})
+    rb_data = all_api_data.get("rocketbooking", {})
+    web_elements = {}
+    if isinstance(rb_data, dict):
+        # รองรับทั้งแบบมีชั้น pmrocket และแบบ flat
+        if isinstance(rb_data.get("pmrocket"), dict):
+            web_elements = dict(rb_data.get("pmrocket") or {})
+        else:
+            web_elements = dict(rb_data)
     target_url = ROCKETBOOKING_URL
     
     if not web_elements:
@@ -107,15 +121,61 @@ async def perform_real_booking(page: Page, all_api_data: dict,
             progress_callback(f"❌ ไม่พบข้อมูลการตั้งค่าสำหรับ '{site_name}' กรุณาตรวจสอบไฟล์ config")
         return
     
-    bot_elements = all_api_data.get("rocketbooking", {}).get("bot_check", {})
+    bot_elements = {}
+    if isinstance(rb_data, dict):
+        if isinstance(rb_data.get("bot_check"), dict):
+            bot_elements = rb_data.get("bot_check")
+        elif "bot_check" in rb_data:
+            bot_elements = rb_data["bot_check"]
 
     if progress_callback:
         progress_callback(f"🚀 กำลังเข้าสู่เว็บไซต์ {site_name} และตรวจสอบบอท...")
     
+    # ปรับ map คีย์ selector เพื่อรองรับ payload จาก API แบบต่างกัน
+    try:
+        if "date_button" not in web_elements and web_elements.get("calendar_day_button_prefix"):
+            web_elements["date_button"] = web_elements["calendar_day_button_prefix"] + "{}" + ")"
+        if "time_button" not in web_elements and web_elements.get("time_buttons_prefix"):
+            web_elements["time_button"] = web_elements["time_buttons_prefix"] + "{}" + ")"
+        if "branch_buttons_base" not in web_elements:
+            if web_elements.get("branch_buttons"):
+                web_elements["branch_buttons_base"] = web_elements["branch_buttons"]
+            elif web_elements.get("branch_list"):
+                web_elements["branch_buttons_base"] = web_elements["branch_list"]
+        if "next_button_after_branch" not in web_elements and web_elements.get("branch_next_button"):
+            web_elements["next_button_after_branch"] = web_elements["branch_next_button"]
+        if "confirm_selection_button" not in web_elements and web_elements.get("datetime_next_button"):
+            web_elements["confirm_selection_button"] = web_elements["datetime_next_button"]
+        if "confirm_booking_button" not in web_elements and web_elements.get("confirm_button"):
+            web_elements["confirm_booking_button"] = web_elements["confirm_button"]
+    except Exception:
+        pass
+
     await page.goto(target_url, wait_until="networkidle")
+
+    # รีโหลดกรณีหน้าไม่สมบูรณ์
+    try:
+        logo_ok = await page.is_visible("img.logo", timeout=3000)
+    except Exception:
+        logo_ok = False
+    if not logo_ok:
+        try:
+            await page.evaluate("() => setTimeout(() => window.location.reload(), 500)")
+            await page.wait_for_load_state("networkidle")
+        except Exception:
+            pass
 
     if not await solve_bot_challenge(page, bot_elements, progress_callback):
         return
+
+    # --- ตรวจสอบและล็อกอิน LINE ถ้าจำเป็น ---
+    try:
+        # ถ้ามีปุ่ม Connect LINE ให้ล็อกอิน
+        if await page.is_visible("button:has-text('Connect LINE'), button:has-text('Connect')", timeout=3000):
+            if not await perform_line_login(page, progress_callback, preferred_email=line_email):
+                return
+    except Exception:
+        pass
 
     # --- โค้ดที่ถูกแก้ไขเพื่อย้ายการตรวจสอบปุ่ม Register มาไว้ด้านหน้า ---
     register_button_selector = web_elements.get("register_button")
@@ -124,11 +184,26 @@ async def perform_real_booking(page: Page, all_api_data: dict,
             progress_callback("❌ ไม่พบ Selector ของปุ่ม Register")
         return
 
-    # ตรวจสอบว่าปุ่ม Register ปรากฏขึ้นหรือไม่
+    # ตรวจสอบว่าปุ่ม Register ปรากฏและ Active หรือไม่
     if not await safe_wait_for_selector(page, register_button_selector, bot_elements, progress_callback):
         if progress_callback:
             progress_callback("❌ ไม่พบปุ่ม Register บนหน้าเว็บ อาจจะยังไม่ถึงเวลาจอง")
         return
+    # รอจนกว่าปุ่มจะไม่เป็นสีเทา (active)
+    try:
+        start = time.time()
+        while True:
+            style = await page.get_attribute(register_button_selector, "style")
+            style = style or ""
+            if "222, 222, 222" not in style.replace(" ", ""):
+                break
+            if timer_seconds and (time.time() - start) > float(timer_seconds):
+                if progress_callback:
+                    progress_callback("⏳ หมดเวลารอ Register Active ตาม Timer")
+                break
+            await asyncio.sleep(0.05)
+    except Exception:
+        pass
         
     # เมื่อเจอปุ่ม Register แล้วจึงตรวจสอบวันที่จอง
     if progress_callback:
@@ -165,6 +240,40 @@ async def perform_real_booking(page: Page, all_api_data: dict,
         if progress_callback:
             progress_callback("✅ กดปุ่ม Register แล้ว!")
 
+    # กรอกฟอร์มโปรไฟล์ถ้ามี
+    try:
+        if await page.is_visible("input#firstname", timeout=3000):
+            from utils import load_user_profile_by_name
+            profile = load_user_profile_by_name(user_profile_name)
+            if profile:
+                if progress_callback:
+                    progress_callback("⏳ กำลังกำหนดข้อมูลโปรไฟล์...")
+                if profile.get("Firstname"):
+                    await page.fill("input#firstname", str(profile.get("Firstname")))
+                if profile.get("Lastname"):
+                    await page.fill("input#lastname", str(profile.get("Lastname")))
+                # เพศ/คำนำหน้าชื่อ (ant-select)
+                try:
+                    if profile.get("Gender"):
+                        await page.click("div.ant-select-selector")
+                        await page.keyboard.press("Enter")
+                except Exception:
+                    pass
+                if profile.get("ID"):
+                    await page.fill("input#ID", str(profile.get("ID")))
+                if profile.get("Phone"):
+                    await page.fill("input#tel", str(profile.get("Phone")))
+                try:
+                    await page.dispatch_event("input[type='checkbox']", "click")
+                except Exception:
+                    pass
+                try:
+                    await page.get_by_text("Next", exact=True).click()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     if progress_callback:
         progress_callback("⏳ กำลังเลือก Branch...")
     branch_buttons_base_selector = web_elements.get("branch_buttons_base")
@@ -172,6 +281,11 @@ async def perform_real_booking(page: Page, all_api_data: dict,
     for _ in range(5):
         branch_selector = f"{branch_buttons_base_selector}:has-text('{selected_branch}')"
         if await page.is_visible(branch_selector):
+            if delay_seconds:
+                try:
+                    await page.wait_for_timeout(int(float(delay_seconds) * 1000))
+                except Exception:
+                    pass
             if not await safe_click(page, branch_selector, bot_elements, progress_callback):
                 return
             if progress_callback:
@@ -193,9 +307,23 @@ async def perform_real_booking(page: Page, all_api_data: dict,
     if not await safe_click(page, next_button_selector, bot_elements, progress_callback):
         return
 
+    # ตรวจ minigame/canvas ก่อนเข้าเลือกวัน
+    try:
+        if await page.is_visible("canvas", timeout=2000):
+            if progress_callback:
+                progress_callback("🎮 พบมินิเกม กำลังพยายามแก้...")
+            await solve_minigame(page)
+    except Exception:
+        pass
+
     if progress_callback:
         progress_callback("⏳ กำลังเลือกวัน...")
     date_selector = web_elements.get("date_button").format(selected_day)
+    if delay_seconds:
+        try:
+            await page.wait_for_timeout(int(float(delay_seconds) * 1000))
+        except Exception:
+            pass
     if not await safe_click(page, date_selector, bot_elements, progress_callback):
         return
     if progress_callback:
@@ -203,15 +331,75 @@ async def perform_real_booking(page: Page, all_api_data: dict,
 
     if progress_callback:
         progress_callback("⏳ กำลังเลือกเวลา...")
-    time_selector = web_elements.get("time_button").format(selected_time)
-    if not await safe_click(page, time_selector, bot_elements, progress_callback):
-        return
-    if progress_callback:
-        progress_callback(f"✅ เลือกเวลา {selected_time} แล้ว!")
+    # รองรับเลือกเวลาแบบ index (ข้าม disabled)
+    if round_index is not None:
+        try:
+            # หา container จาก prefix หรือ base selector
+            prefix = web_elements.get("time_buttons_prefix")
+            if prefix and "> button:nth-child(" in prefix:
+                container = prefix.split(' > button:nth-child(')[0]
+            else:
+                container = web_elements.get("time_buttons_base_selector") or web_elements.get("time_buttons_base")
+            if container:
+                await page.wait_for_selector(container, state="visible", timeout=15000)
+                if delay_seconds:
+                    try:
+                        await page.wait_for_timeout(int(float(delay_seconds) * 1000))
+                    except Exception:
+                        pass
+                # เลือกปุ่มที่ไม่ disabledTime
+                buttons = page.locator(f"{container} button:not([class*='disabledTime'])")
+                count = await buttons.count()
+                idx = max(0, min(round_index, count - 1))
+                await buttons.nth(idx).click()
+                if progress_callback:
+                    progress_callback(f"✅ เลือกเวลา (รอบที่ {idx+1}) แล้ว!")
+            else:
+                # fallback โดยใช้ selector เดิม
+                time_selector = web_elements.get("time_button").format(selected_time)
+                if delay_seconds:
+                    try:
+                        await page.wait_for_timeout(int(float(delay_seconds) * 1000))
+                    except Exception:
+                        pass
+                await page.click(time_selector)
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"❌ เลือกเวลาแบบรอบไม่สำเร็จ: {e}")
+            return
+    else:
+        time_selector = web_elements.get("time_button").format(selected_time)
+        if delay_seconds:
+            try:
+                await page.wait_for_timeout(int(float(delay_seconds) * 1000))
+            except Exception:
+                pass
+        if not await safe_click(page, time_selector, bot_elements, progress_callback):
+            return
+        if progress_callback:
+            progress_callback(f"✅ เลือกเวลา {selected_time} แล้ว!")
 
     datetime_next_button_selector = web_elements.get("confirm_selection_button")
     if not await safe_click(page, datetime_next_button_selector, bot_elements, progress_callback):
         return
+    # ช่วยกด Confirm1 แบบเร่ง
+    try:
+        await page.evaluate("""
+            () => {
+              setTimeout(() => {
+                const interval = setInterval(() => {
+                  const container = document.querySelector('div.wholePage.datePicker');
+                  if (!container) return;
+                  const buttons = Array.from(container.querySelectorAll('button'))
+                    .filter(b => /Confirm/i.test(b.textContent||''));
+                  buttons.forEach(btn => btn.click());
+                }, 80);
+                setTimeout(() => clearInterval(interval), 2000);
+              }, 180);
+            }
+        """)
+    except Exception:
+        pass
 
     if progress_callback:
         progress_callback("⏳ กำลังติ๊ก Checkbox...")
@@ -227,6 +415,23 @@ async def perform_real_booking(page: Page, all_api_data: dict,
         if progress_callback:
             progress_callback("🚨 รอให้คุณกด Confirm Booking ด้วยตัวเอง...")
     else:
+        # Flood ช่วยกด Confirm2 ช่วงสั้นๆ เพิ่มโอกาสสำเร็จ
+        try:
+            await page.evaluate("""
+                () => {
+                  setTimeout(() => {
+                    const interval = setInterval(() => {
+                      const container = document.querySelector('div.InfoPage') || document.body;
+                      const buttons = Array.from(container.querySelectorAll('button'))
+                        .filter(b => /Confirm/i.test(b.textContent||''));
+                      buttons.forEach(btn => btn.click());
+                    }, 120);
+                    setTimeout(() => clearInterval(interval), 5000);
+                  }, 300);
+                }
+            """)
+        except Exception:
+            pass
         if not await safe_click(page, confirm_booking_selector, bot_elements, progress_callback):
             return
         if progress_callback:
