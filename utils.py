@@ -284,6 +284,20 @@ def setup_config_files():
 
     print("ตั้งค่าไฟล์ config สำเร็จ")
 
+    # Ensure central config.json exists with placeholders for quick onboarding
+    try:
+        cfg_path = company_dir / "config.json"
+        if not cfg_path.exists():
+            cfg_template = {
+                "API_TOKEN": "",
+                "SPREADSHEET_KEY": ""
+            }
+            with open(cfg_path, 'w', encoding='utf-8') as f:
+                json.dump(cfg_template, f, indent=4, ensure_ascii=False)
+            print(f"สร้างไฟล์ config.json สำหรับตั้งค่าเริ่มต้น: {cfg_path}")
+    except Exception:
+        pass
+
 
 def register_user(username: str,
                   password: str,
