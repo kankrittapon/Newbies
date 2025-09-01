@@ -35,3 +35,6 @@ chrome_profiles/
 build/
 dist/
 
+# Local bundled config for distribution (not in repo)
+bundled_config.json
+

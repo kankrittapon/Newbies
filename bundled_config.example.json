@@ -1,0 +1,15 @@
+{
+  "API_TOKEN": "PUT_YOUR_RUNTIME_TOKEN_HERE",
+  "SPREADSHEET_KEY": "PUT_YOUR_SHEET_KEY_HERE",
+
+  "API_KEY_BRANCHS": "",
+  "API_KEY_PMROCKET": "",
+  "API_KEY_ROCKETBOOKING": "",
+  "API_KEY_TIMES": "",
+  "API_KEY_ITHITEC": "",
+
+  "CREDENTIALS_BASE_URL": "https://backend-secure-cred-api.onrender.com/get-credentials",
+
+  "OPN_WEBHOOK_SECRET": "",
+  "C2P_WEBHOOK_SECRET": ""
+}

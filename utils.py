@@ -60,10 +60,26 @@ def _load_config_overrides() -> dict:
 
 
 _load_env_from_files()
+
+def _load_bundled_config() -> dict:
+    try:
+        p = Path.cwd() / "bundled_config.json"
+        if p.exists():
+            with open(p, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+_BUNDLED_CONFIG = _load_bundled_config()
 _CONFIG_OVERRIDES = _load_config_overrides()
 
 # Constants (sanitized: read from env, no hardcoded secrets)
 def _env(name: str, default: str = "") -> str:
+    # Priority: bundled_config.json (shipped with app) -> real environment -> AppData config.json -> default
+    if name in _BUNDLED_CONFIG and str(_BUNDLED_CONFIG[name]).strip():
+        return str(_BUNDLED_CONFIG[name]).strip()
     v = os.getenv(name)
     if v is not None and v != "":
         return v
