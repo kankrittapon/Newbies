@@ -9,20 +9,25 @@ import threading
 import time
 from pathlib import Path
 
-# Constants
+# Constants (sanitized: read from env, no hardcoded secrets)
+def _env(name: str, default: str = "") -> str:
+    return os.getenv(name, default)
+
 API_KEYS = {
-    "branchs": "69fa5371392bdfe7160f378ef4b10bb6",
-    "pmrocket": "0857df816fa1952d96c6b76762510516",
-    "rocketbooking": "8155bfa0c8faaed0a7917df38f0238b6",
-    "times": "1582b63313475631d732f4d1aed9a534",
-    "ithitec": "a48bca796db6089792a2d9047c7ebf78",
-    "token": "a2htZW5odWFrdXltYWV5ZWQ="
+    "branchs": _env("API_KEY_BRANCHS"),
+    "pmrocket": _env("API_KEY_PMROCKET"),
+    "rocketbooking": _env("API_KEY_ROCKETBOOKING"),
+    "times": _env("API_KEY_TIMES"),
+    "ithitec": _env("API_KEY_ITHITEC"),
+    "token": _env("API_TOKEN"),
 }
-BASE_URL = "https://backend-secure-cred-api.onrender.com/get-credentials"
+BASE_URL = _env("CREDENTIALS_BASE_URL", "https://backend-secure-cred-api.onrender.com/get-credentials")
 
 # โหลด Google API credentials.json จาก backend
 def get_google_credentials_json():
-    token = API_KEYS["token"]
+    token = (API_KEYS.get("token") or "").strip()
+    if not token:
+        raise RuntimeError("Missing API_TOKEN environment variable")
     headers = {"X-API-Token": token}
     response = requests.get(BASE_URL, headers=headers)
     response.raise_for_status()
@@ -71,6 +76,8 @@ def is_today_booking_open(sheet_name: str = "todaybooking",
     เงื่อนไข: หาแถวที่ตรงกับวันที่วันนี้ และ flag เป็น TRUE/true/1/Yes
     """
     client = create_gsheet_client()
+    if not SPREADSHEET_KEY:
+        raise RuntimeError("Missing SPREADSHEET_KEY environment variable")
     ws = open_google_sheet(client, SPREADSHEET_KEY).worksheet(sheet_name)
     records = ws.get_all_records()
     today = datetime.now().date()
@@ -94,13 +101,15 @@ def is_today_booking_open(sheet_name: str = "todaybooking",
     return False
 
 # ส่วนที่เพิ่มเข้ามาสำหรับการจัดการ Google Sheet Login
-SPREADSHEET_KEY = "1rQnV_-30tmb8oYj7g9q6-YdyuWZZ2c8sZ2xH7pqszVk"
+SPREADSHEET_KEY = _env("SPREADSHEET_KEY")
 SHEET_NAME = "Users" # เปลี่ยนตามชื่อ sheet จริง
 TOPUP_SHEET_NAME = "Topups"
 
 def google_sheet_check_login(username, password):
     try:
         client = create_gsheet_client()
+        if not SPREADSHEET_KEY:
+            raise RuntimeError("Missing SPREADSHEET_KEY environment variable")
         sheet = open_google_sheet(client, SPREADSHEET_KEY).worksheet(SHEET_NAME)
         records = sheet.get_all_records()
         user = None
@@ -402,6 +411,8 @@ def _ensure_worksheet(spreadsheet, name: str, headers: list[str]):
 # ---------- Top-up helpers ----------
 
 def _ensure_topup_sheet(client):
+    if not SPREADSHEET_KEY:
+        raise RuntimeError("Missing SPREADSHEET_KEY environment variable")
     ss = open_google_sheet(client, SPREADSHEET_KEY)
     try:
         ws = ss.worksheet(TOPUP_SHEET_NAME)
