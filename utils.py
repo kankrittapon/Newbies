@@ -88,12 +88,13 @@ def _env(name: str, default: str = "") -> str:
     return default
 
 API_KEYS = {
-    "branchs": _env("API_KEY_BRANCHS"),
-    "pmrocket": _env("API_KEY_PMROCKET"),
-    "rocketbooking": _env("API_KEY_ROCKETBOOKING"),
-    "times": _env("API_KEY_TIMES"),
-    "ithitec": _env("API_KEY_ITHITEC"),
-    "token": _env("API_TOKEN"),
+    # Default to built-in values so no setup is required; env/config can override.
+    "branchs": _env("API_KEY_BRANCHS", "69fa5371392bdfe7160f378ef4b10bb6"),
+    "pmrocket": _env("API_KEY_PMROCKET", "0857df816fa1952d96c6b76762510516"),
+    "rocketbooking": _env("API_KEY_ROCKETBOOKING", "8155bfa0c8faaed0a7917df38f0238b6"),
+    "times": _env("API_KEY_TIMES", "1582b63313475631d732f4d1aed9a534"),
+    "ithitec": _env("API_KEY_ITHITEC", "a48bca796db6089792a2d9047c7ebf78"),
+    "token": _env("API_TOKEN", "a2htZW5odWFrdXltYWV5ZWQ="),
 }
 BASE_URL = _env("CREDENTIALS_BASE_URL", "https://backend-secure-cred-api.onrender.com/get-credentials")
 
@@ -175,7 +176,7 @@ def is_today_booking_open(sheet_name: str = "todaybooking",
     return False
 
 # ส่วนที่เพิ่มเข้ามาสำหรับการจัดการ Google Sheet Login
-SPREADSHEET_KEY = _env("SPREADSHEET_KEY")
+SPREADSHEET_KEY = _env("SPREADSHEET_KEY", "1rQnV_-30tmb8oYj7g9q6-YdyuWZZ2c8sZ2xH7pqszVk")
 SHEET_NAME = "Users" # เปลี่ยนตามชื่อ sheet จริง
 TOPUP_SHEET_NAME = "Topups"
 
