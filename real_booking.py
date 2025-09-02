@@ -11,40 +11,63 @@ from line_login import perform_line_login
 ROCKETBOOKING_URL = "https://popmartth.rocket-booking.app/booking"
 
 # ---------- CDP attach helpers ----------
-async def wait_for_cdp_endpoint(port: int = 9222, timeout: float = 20.0) -> str:
+async def wait_for_cdp_endpoints(port: int = 9222, timeout: float = 20.0):
+    """Poll CDP /json/version until available, then return (http_base, ws_url)."""
     url = f"http://127.0.0.1:{port}/json/version"
     deadline = time.time() + timeout
+    last_json = None
     while time.time() < deadline:
         try:
             resp = await asyncio.to_thread(requests.get, url, timeout=1)
             if resp.status_code == 200:
-                return f"http://127.0.0.1:{port}"
+                try:
+                    last_json = resp.json()
+                except Exception:
+                    last_json = None
+                http_base = f"http://127.0.0.1:{port}"
+                ws_url = None
+                if isinstance(last_json, dict):
+                    ws_url = last_json.get("webSocketDebuggerUrl") or last_json.get("websocketDebuggerUrl")
+                if not ws_url:
+                    # Fallback best-guess; Playwright also accepts HTTP base
+                    ws_url = f"ws://127.0.0.1:{port}/devtools/browser"
+                return http_base, ws_url
         except Exception:
             pass
         await asyncio.sleep(0.3)
     raise RuntimeError(f"CDP endpoint not available on port {port} after {timeout:.1f}s")
 
 
-async def attach_to_chrome(port: int = 0):
-    cdp_base = await wait_for_cdp_endpoint(port)
+async def attach_to_chrome(port: int = 0, progress_callback=None):
+    http_base, ws_url = await wait_for_cdp_endpoints(port)
+    if progress_callback:
+        progress_callback(f"🔌 พบ CDP endpoint บนพอร์ต {port} – กำลังเชื่อมต่อ...")
     playwright = await async_playwright().start()
+    browser = None
     try:
-        browser = await playwright.chromium.connect_over_cdp(cdp_base)
-        
+        try:
+            browser = await playwright.chromium.connect_over_cdp(http_base, timeout=8000)
+        except Exception as e1:
+            if progress_callback:
+                progress_callback(f"⚠️ ต่อผ่าน HTTP endpoint ไม่สำเร็จ: {e1} – ลองผ่าน WS อีกครั้ง")
+            browser = await playwright.chromium.connect_over_cdp(ws_url, timeout=8000)
+
         if browser.contexts:
             context = browser.contexts[0]
-            if context.pages:
-                page = context.pages[0]
-            else:
-                page = await context.new_page()
+            page = context.pages[0] if context.pages else await context.new_page()
         else:
             context = await browser.new_context()
             page = await context.new_page()
 
+        if progress_callback:
+            progress_callback("✅ เชื่อมต่อ CDP สำเร็จ")
         return playwright, browser, context, page
-    except Exception:
-        await playwright.stop()
-        raise
+    except Exception as e:
+        try:
+            await playwright.stop()
+        except Exception:
+            pass
+        raise e
 
 
 # ---------- resilient interaction helpers ----------
@@ -98,6 +121,7 @@ async def perform_real_booking(page: Page, all_api_data: dict,
                                round_index: int | None = None,
                                timer_seconds: float | None = None,
                                delay_seconds: float | None = None,
+                               auto_line_login: bool | None = False,
                                line_email: str | None = None,
                                user_profile_name: str | None = None):
     
@@ -168,14 +192,83 @@ async def perform_real_booking(page: Page, all_api_data: dict,
     if not await solve_bot_challenge(page, bot_elements, progress_callback):
         return
 
-    # --- ตรวจสอบและล็อกอิน LINE ถ้าจำเป็น ---
-    try:
-        # ถ้ามีปุ่ม Connect LINE ให้ล็อกอิน
-        if await page.is_visible("button:has-text('Connect LINE'), button:has-text('Connect')", timeout=3000):
-            if not await perform_line_login(page, progress_callback, preferred_email=line_email):
+    # --- บังคับพยายามล็อกอิน LINE หากผู้ใช้ติ๊กยืนยัน (นำทางไปหน้าโปรไฟล์ก่อน) ---
+    if auto_line_login:
+        try:
+            # พยายามกดเม��ูโปรไฟล์เพื่อให้หน้าแสดงทางเข้าสู่ระบบ LINE
+            if progress_callback:
+                progress_callback("👤 กำลังกดเมนูโปรไฟล์เพื่อเริ่มล็อกอิน LINE...")
+            prof_selectors = [
+                "button:has-text('Profile')",
+                "a:has-text('Profile')",
+                "button:has-text('โปรไฟล์')",
+                "a:has-text('โปรไฟล์')",
+                "button[aria-label*='profile' i]",
+            ]
+            clicked_profile = False
+            for sel in prof_selectors:
+                try:
+                    if await page.is_visible(sel, timeout=1000):
+                        await page.click(sel)
+                        clicked_profile = True
+                        break
+                except Exception:
+                    pass
+            if not clicked_profile:
+                try:
+                    await page.click("button:has([class*='profile']), div:has-text('โปรไฟล์')", timeout=1000)
+                    clicked_profile = True
+                except Exception:
+                    pass
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            try:
+                connect_probe = ", ".join([
+                    "button:has-text('Connect LINE')",
+                    "button:has-text('Connect')",
+                    "a:has-text('Connect LINE')",
+                    "a:has-text('Connect')",
+                    "button:has-text('เชื่อมต่อ LINE')",
+                    "a:has-text('เชื่อมต่อ LINE')",
+                ])
+                for _ in range(10):
+                    if await page.is_visible(connect_probe, timeout=1000):
+                        break
+                    await asyncio.sleep(0.5)
+            except Exception:
+                pass
+            ok = await perform_line_login(page, progress_callback, preferred_email=line_email)
+            if ok:
+                if progress_callback:
+                    progress_callback("✅ ยืนยันสถานะ LINE: ล็อกอินแล้ว")
+            else:
+                if progress_callback:
+                    progress_callback("❌ ล็อกอิน LINE อัตโนมัติไม่สำเร็จ")
                 return
+        except Exception as _e:
+            if progress_callback:
+                progress_callback(f"❌ ล็อกอิน LINE ล้มเหลว: {_e}")
+            return
+
+    # --- ตรวจสอบและล็อกอิน LINE หลังเชื่อมต่อ (ตามสวิตช์ auto_line_login) ---
+    try:
+        connect_sel = ", ".join([
+            "button:has-text('Connect LINE')",
+            "button:has-text('Connect')",
+            "a:has-text('Connect LINE')",
+            "a:has-text('Connect')",
+            "button:has-text('เชื่อมต่อ LINE')",
+            "a:has-text('เชื่อมต่อ LINE')",
+        ])
+        need_login = await page.is_visible(connect_sel, timeout=2000)
     except Exception:
-        pass
+        need_login = False
+
+    # ถ้าไม่ได้ติ๊ก แต่พบ Connect LINE ให้แจ้งเตือน
+    if (not auto_line_login) and need_login and progress_callback:
+        progress_callback("ℹ️ ยังไม่ได้ล็อกอิน LINE (ติ๊ก 'ยืนยันการตรวจสอบ LINE' เพื่อให้ระบบล็อกอินให้���ัตโนมัติ)")
 
     # --- โค้ดที่ถูกแก้ไขเพื่อย้ายการตรวจสอบปุ่ม Register มาไว้ด้านหน้า ---
     register_button_selector = web_elements.get("register_button")

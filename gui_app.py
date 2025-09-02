@@ -14,7 +14,7 @@ from real_booking import perform_real_booking, attach_to_chrome
 from playwright_ops import launch_browser_and_perform_booking as trial_booking
 from playwright.async_api import async_playwright
 from Scheduledreal_booking import ScheduledManager
-from utils import get_all_api_data, google_sheet_check_login, setup_config_files, start_license_session, is_today_booking_open, get_user_profile_names, register_user
+from utils import get_all_api_data, google_sheet_check_login, setup_config_files, start_license_session, is_today_booking_open, get_user_profile_names, register_user, load_line_credentials, load_user_profile
 from Scroll_ import ScrollableFrame
 from ultrafast_booking import run_ultrafast_booking
 from topup import TopUpDialog
@@ -26,7 +26,7 @@ TRIAL_SITES = ["EZBOT", "PMROCKET"]
 days = [str(i) for i in range(1, 32)]
 
 class BookingProcessWindow(tk.Tk):
-    def __init__(self, parent_window_class, user_info, mode, site_name, browser_type, all_api_data, selected_branch, selected_day, selected_time, register_by_user, confirm_by_user, cdp_port=None, round_index=None, timer_seconds=None, delay_seconds=None):
+    def __init__(self, parent_window_class, user_info, mode, site_name, browser_type, all_api_data, selected_branch, selected_day, selected_time, register_by_user, confirm_by_user, cdp_port=None, round_index=None, timer_seconds=None, delay_seconds=None, auto_line_login=False):
         print(f"DEBUG: Creating BookingProcessWindow for mode '{mode}'...")
         super().__init__()
         self.parent_window_class = parent_window_class
@@ -50,6 +50,7 @@ class BookingProcessWindow(tk.Tk):
         self.round_index = round_index
         self.timer_seconds = timer_seconds
         self.delay_seconds = delay_seconds
+        self.auto_line_login = auto_line_login
         
         self.thread = None
         self._async_loop = None
@@ -133,7 +134,9 @@ class BookingProcessWindow(tk.Tk):
             except Exception:
                 pass
 
-            playwright, browser, context, page = await attach_to_chrome(self.cdp_port)
+            self.update_status(f"🔌 กำลังเชื่อมต่อพอร์ต {self.cdp_port} ...")
+            playwright, browser, context, page = await attach_to_chrome(self.cdp_port, self.update_status)
+            self.update_status(f"🔌 เชื่อมต่อพอร์ต {self.cdp_port} เสร็จ")
             self.update_status("✅ เชื่อมต่อกับเบราว์เซอร์สำเร็จ!")
 
             await perform_real_booking(
@@ -148,7 +151,8 @@ class BookingProcessWindow(tk.Tk):
                 progress_callback=self.update_status,
                 round_index=self.round_index,
                 timer_seconds=self.timer_seconds,
-                delay_seconds=self.delay_seconds
+                delay_seconds=self.delay_seconds,
+                auto_line_login=self.auto_line_login
             )
         except asyncio.CancelledError:
             self.update_status("🚨 Task ถูกยกเลิก")
@@ -301,7 +305,7 @@ class SingleBookingWindow(tk.Tk):
         line_frame.pack(pady=10)
         
         self.confirm_line_check_var = tk.BooleanVar()
-        ttk.Checkbutton(line_frame, text="ยืนยันการตรวจสอบ LINE", variable=self.confirm_line_check_var, command=self._on_line_check_toggle).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(line_frame, text="ยืนยันการตรวจสอบ LINE", variable=self.confirm_line_check_var).pack(side=tk.LEFT, padx=5)
         
         open_settings_btn = ttk.Button(line_frame, text="ตั้งค่า LINE/Profile", command=self.on_line_settings)
         open_settings_btn.pack(side=tk.LEFT, padx=5)
@@ -386,6 +390,38 @@ class SingleBookingWindow(tk.Tk):
             messagebox.showwarning("คำเตือน", "กรุณาเลือก Site, Browser, Profile, Branch, วัน และ เวลา ให้ครบถ้วน!")
             return
         
+        # ถ้าติ๊กตรว�� LINE ให้ตรวจว่าตั้งค่า LINE และโปรไฟล์แล้วหรือยัง
+        confirm_line_login = bool(self.confirm_line_check_var.get())
+        if confirm_line_login:
+            # ตรวจ LINE credentials
+            try:
+                creds = load_line_credentials()
+            except Exception:
+                creds = {}
+            valid_line = False
+            if isinstance(creds, dict):
+                if any(k in creds for k in ("Email","email","username","Password","password")):
+                    em = (creds.get("Email") or creds.get("email") or creds.get("username") or "").strip()
+                    pw = (creds.get("Password") or creds.get("password") or "").strip()
+                    valid_line = bool(em and pw)
+                else:
+                    for em, pw in creds.items():
+                        if str(em).strip() and str(pw or "").strip():
+                            valid_line = True
+                            break
+            if not valid_line:
+                messagebox.showwarning("คำเตือน", "คุณติ๊กตรวจ LINE แต่ยังไม่ได้ตั้งค่า LINE Email/Password ในเมนูตั้งค่า")
+                return
+            # ตรวจโปรไฟล์ผู้ใช้พื้นฐาน
+            try:
+                prof = load_user_profile()
+            except Exception:
+                prof = {}
+            has_profile = isinstance(prof, dict) and any(str(v).strip() for v in prof.values())
+            if not has_profile:
+                messagebox.showwarning("คำเตือน", "คุณติ๊กตรวจ LINE แต่ยังไม่ได้ตั้งค่าโปรไฟล์ผู้ใช้ในเมนูตั้งค่า")
+                return
+
         try:
             launched_port = None
             if selected_browser == "Chrome":
@@ -401,6 +437,7 @@ class SingleBookingWindow(tk.Tk):
             # ปรับ delay ตามโหมดช้า หากผู้ใช้ไม่ได้กำหนดไว้
             if self.slow_var.get() and delay_seconds is None:
                 delay_seconds = 0.3
+            confirm_line_login = bool(self.confirm_line_check_var.get())
 
             BookingProcessWindow(
                 parent_window_class=SingleBookingWindow, 
@@ -417,7 +454,8 @@ class SingleBookingWindow(tk.Tk):
                 cdp_port=launched_port,
                 round_index=round_index,
                 timer_seconds=timer_seconds,
-                delay_seconds=delay_seconds
+                delay_seconds=delay_seconds,
+                auto_line_login=confirm_line_login
             ).mainloop()
         except Exception as e:
             messagebox.showerror("Error", f"เกิดข้อผิดพลาดในการเปิดหน้าต่างจอง: {e}")

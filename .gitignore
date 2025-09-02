@@ -1,41 +1,50 @@
-# OS / Editors
-.DS_Store
-Thumbs.db
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+*.pyd
+*.dll
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Logs
+*.log
+
+# IDE
 .vscode/
 .idea/
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# OS
+.DS_Store
+Thumbs.db
 
-# Virtual envs
-env/
-venv/
-.venv/
-
-# Local data / credentials
+# Env / secrets
 .env
-*.env
-credentials.json
-service_account.json
-token.json
-
-# App caches / profiles (large & machine-specific)
-chrome_profiles/
-*.log
-
-# Build / dist
-build/
-dist/
-
-# Local bundled config for distribution (not in repo)
+.env.*
+config.json
 bundled_config.json
 
-utils.py
+# Local databases / caches
+events.db
+
+# Local browser profiles (generated)
+chrome_profiles/
+edge_profiles/
