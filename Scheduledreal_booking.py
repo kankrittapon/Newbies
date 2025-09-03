@@ -68,7 +68,9 @@ class BookingTask:
                 timer_seconds=self.task_data.get('timer_seconds'),
                 delay_seconds=self.task_data.get('delay_seconds'),
                 line_email=self.task_data.get('line_email'),
-                user_profile_name=self.task_data.get('user_profile_name')
+                user_profile_name=self.task_data.get('user_profile_name'),
+                auto_line_login=True,
+                enable_fallback=True
             )
             progress_callback(f"✅ Task [{self.id[:4]}] - การจองเสร็จสิ้น!")
             self.status = "completed"

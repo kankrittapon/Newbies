@@ -1,4 +1,4 @@
-# utils.py  —  Cloudflare Worker client (Auth/Config/Topup/Booking/License)
+﻿# utils.py  â€”  Cloudflare Worker client (Auth/Config/Topup/Booking/License)
 from __future__ import annotations
 import os, json, time, threading, socket
 from pathlib import Path
@@ -7,19 +7,27 @@ import requests
 
 # ========= BASIC CONFIG =========
 BACKEND_URL = os.getenv("BACKEND_BASE_URL", "https://popmart-worker.bokkchoypayment.workers.dev").rstrip("/")
-HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT_SEC", "10"))
 
-# ใช้เฉพาะ endpoint ภายใน (ถ้าคุณเรียก /internal/* จากแอป)
+def _num_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+HTTP_TIMEOUT = _num_env("HTTP_TIMEOUT_SEC", 10)
+
+# à¹ƒà¸Šà¹‰à¹€à¸‰à¸žà¸²à¸° endpoint à¸ à¸²à¸¢à¹ƒà¸™ (à¸–à¹‰à¸²à¸„à¸¸à¸“à¹€à¸£à¸µà¸¢à¸ /internal/* à¸ˆà¸²à¸à¹à¸­à¸›)
 INTERNAL_AUTH = os.getenv("INTERNAL_AUTH_SECRET", "")
 
 # ========= /config/all (KV) with ETag cache =========
 _CFG_CACHE: Dict[str, Any] = {"data": None, "ts": 0.0, "etag": None}
-_CFG_TTL = int(os.getenv("CONFIG_CACHE_SEC", "300"))  # 5 นาที
+_CFG_TTL = int(os.getenv("CONFIG_CACHE_SEC", "300"))  # 5 à¸™à¸²à¸—à¸µ
 
 def get_config_all(force: bool=False) -> Dict[str, Any]:
-    """ดึง config/all จาก KV พร้อม ETag+Cache"""
+    """à¸”à¸¶à¸‡ config/all à¸ˆà¸²à¸ KV à¸žà¸£à¹‰à¸­à¸¡ ETag+Cache"""
     now = time.time()
-    if not force and _CFG_CACHE["data"] and (now - _CFG_CACHE["ts"] < _CFG_TTL):
+    ttl = _num_env("CONFIG_CACHE_SEC", 300)
+    if not force and _CFG_CACHE["data"] and (now - _CFG_CACHE["ts"] < ttl):
         return _CFG_CACHE["data"]
     headers = {}
     if _CFG_CACHE["etag"]:
@@ -47,7 +55,7 @@ class AuthSession:
         return {"Authorization": f"Bearer {self.token}", "content-type":"application/json"}
 
 def register(username: str, password: str, email: Optional[str]=None) -> bool:
-    """สมัครผู้ใช้ใหม่ (role เริ่มต้น normal)"""
+    """à¸ªà¸¡à¸±à¸„à¸£à¸œà¸¹à¹‰à¹ƒà¸Šà¹‰à¹ƒà¸«à¸¡à¹ˆ (role à¹€à¸£à¸´à¹ˆà¸¡à¸•à¹‰à¸™ normal)"""
     b = {"username": username, "password": password}
     if email: b["email"] = email
     r = requests.post(f"{BACKEND_URL}/auth/register", json=b, timeout=HTTP_TIMEOUT)
@@ -57,17 +65,21 @@ def register(username: str, password: str, email: Optional[str]=None) -> bool:
     return bool(r.json().get("ok"))
 
 def login(username: str, password: str, device_id: Optional[str]=None) -> Optional[AuthSession]:
-    """ล็อกอินแล้วคืน AuthSession (เก็บ token ไว้เรียก endpoint อื่น)"""
+
+    """à¸¥à¹‡à¸­à¸à¸­à¸´à¸™à¹à¸¥à¹‰à¸§à¸„à¸·à¸™ AuthSession (à¹€à¸à¹‡à¸š token à¹„à¸§à¹‰à¹€à¸£à¸µà¸¢à¸ endpoint à¸­à¸·à¹ˆà¸™)"""
     b = {"username": username, "password": password}
     if device_id: b["device_id"] = device_id
     r = requests.post(f"{BACKEND_URL}/auth/login", json=b, timeout=HTTP_TIMEOUT)
     if r.status_code != 200:
         return None
     j = r.json()
-    return AuthSession(j["token"], j["username"], j["role"], j["expires_at"])
+    tok = j.get("token"); user = j.get("username"); role = j.get("role"); exp = j.get("expires_at")
+    if not tok or not user:
+        return None
+    return AuthSession(tok, user, role or "normal", exp or "")
 
 def me(session: AuthSession) -> Dict[str, Any]:
-    """ดึงข้อมูลผู้ใช้ปัจจุบันด้วย Bearer token"""
+    """à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸œà¸¹à¹‰à¹ƒà¸Šà¹‰à¸›à¸±à¸ˆà¸ˆà¸¸à¸šà¸±à¸™à¸”à¹‰à¸§à¸¢ Bearer token"""
     r = requests.get(f"{BACKEND_URL}/auth/me", headers=session.headers, timeout=HTTP_TIMEOUT)
     r.raise_for_status()
     return r.json()
@@ -75,19 +87,23 @@ def me(session: AuthSession) -> Dict[str, Any]:
 # ========= TOPUPS (internal-only for now) =========
 def request_topup(username: str, amount: float, method="Manual", description="Top-up") -> str:
     """
-    เรียก /internal/topups/request — ต้องมี INTERNAL_AUTH
-    คืน TxID สำหรับนำไปชำระ/แนบหลักฐานต่อไป
+    à¹€à¸£à¸µà¸¢à¸ /internal/topups/request â€” à¸•à¹‰à¸­à¸‡à¸¡à¸µ INTERNAL_AUTH
+    à¸„à¸·à¸™ TxID à¸ªà¸³à¸«à¸£à¸±à¸šà¸™à¸³à¹„à¸›à¸Šà¸³à¸£à¸°/à¹à¸™à¸šà¸«à¸¥à¸±à¸à¸à¸²à¸™à¸•à¹ˆà¸­à¹„à¸›
     """
     if not INTERNAL_AUTH:
         raise RuntimeError("Missing INTERNAL_AUTH_SECRET (env) for internal endpoint")
-    h = {"X-Internal-Auth": INTERNAL_AUTH, "content-type":"application/json"}
+    h = {"X-Internal-Auth": INTERNAL_AUTH, "content-type": "application/json"}
     b = {"username": username, "amount": amount, "method": method, "description": description}
     r = requests.post(f"{BACKEND_URL}/internal/topups/request", headers=h, json=b, timeout=HTTP_TIMEOUT)
     r.raise_for_status()
-    return r.json()["TxID"]
+    j = r.json()
+    txid = j.get("TxID")
+    if not txid:
+        raise RuntimeError(f"Topup request failed: {j}")  # à¸à¸±à¸™ response à¹„à¸¡à¹ˆà¸•à¸£à¸‡à¸ªà¹€à¸›à¸„
+    return txid
 
 def mark_paid(txid: str, provider="Manual", provider_txn_id: str="") -> bool:
-    """เรียก /internal/topups/mark-paid เพื่อเปลี่ยนสถานะเป็น Approved และอัปเดต role ถ้าจำนวนตรง ROLE_MAP_JSON"""
+    """à¹€à¸£à¸µà¸¢à¸ /internal/topups/mark-paid à¹€à¸žà¸·à¹ˆà¸­à¹€à¸›à¸¥à¸µà¹ˆà¸¢à¸™à¸ªà¸–à¸²à¸™à¸°à¹€à¸›à¹‡à¸™ Approved à¹à¸¥à¸°à¸­à¸±à¸›à¹€à¸”à¸• role à¸–à¹‰à¸²à¸ˆà¸³à¸™à¸§à¸™à¸•à¸£à¸‡ ROLE_MAP_JSON"""
     if not INTERNAL_AUTH:
         raise RuntimeError("Missing INTERNAL_AUTH_SECRET (env) for internal endpoint")
     h = {"X-Internal-Auth": INTERNAL_AUTH, "content-type":"application/json"}
@@ -96,17 +112,17 @@ def mark_paid(txid: str, provider="Manual", provider_txn_id: str="") -> bool:
     if r.status_code != 200: return False
     return bool(r.json().get("ok", True))
 
-# ========= TODAY BOOKING (optional: ให้ backend มี endpoint นี้) =========
+# ========= TODAY BOOKING (optional: à¹ƒà¸«à¹‰ backend à¸¡à¸µ endpoint à¸™à¸µà¹‰) =========
 _TODAY_CACHE: Dict[str, Any] = {"val": None, "ts": 0.0}
-_TODAY_TTL = int(os.getenv("TODAYBOOKING_CACHE_SEC", "60"))
+_TODAY_TTL = _num_env("TODAYBOOKING_CACHE_SEC", 60)
 
-def is_today_booking_open() -> bool:
+def is_today_booking_open(force: bool = False) -> bool:
     """
-    ถ้า backend มี /todaybooking/open -> ใช้เลย
-    ถ้ายังไม่มี endpoint นี้ ฟังก์ชันจะคืน False เป็นค่าเริ่มต้น
+    à¸–à¹‰à¸² backend à¸¡à¸µ /todaybooking/open -> à¹ƒà¸Šà¹‰à¹€à¸¥à¸¢
+    à¸–à¹‰à¸²à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µ endpoint à¸™à¸µà¹‰ à¸Ÿà¸±à¸‡à¸à¹Œà¸Šà¸±à¸™à¸ˆà¸°à¸„à¸·à¸™ False à¹€à¸›à¹‡à¸™à¸„à¹ˆà¸²à¹€à¸£à¸´à¹ˆà¸¡à¸•à¹‰à¸™
     """
     now = time.time()
-    if _TODAY_CACHE["val"] is not None and (now - _TODAY_CACHE["ts"] < _TODAY_TTL):
+    if not force and _TODAY_CACHE["val"] is not None and (now - _TODAY_CACHE["ts"] < _TODAY_TTL):
         return bool(_TODAY_CACHE["val"])
     r = requests.get(f"{BACKEND_URL}/todaybooking/open", timeout=HTTP_TIMEOUT)
     if r.status_code == 404:
@@ -117,10 +133,10 @@ def is_today_booking_open() -> bool:
     _TODAY_CACHE.update({"val": val, "ts": now})
     return val
 
-# ========= LICENSE (เตรียมไว้ ถ้าคุณเพิ่ม endpoint ฝั่ง backend) =========
+# ========= LICENSE (à¹€à¸•à¸£à¸µà¸¢à¸¡à¹„à¸§à¹‰ à¸–à¹‰à¸²à¸„à¸¸à¸“à¹€à¸žà¸´à¹ˆà¸¡ endpoint à¸à¸±à¹ˆà¸‡ backend) =========
 class LicenseClient:
     """
-    ใช้เมื่อ backend มี /license/claim /license/heartbeat /license/release แล้ว
+    à¹ƒà¸Šà¹‰à¹€à¸¡à¸·à¹ˆà¸­ backend à¸¡à¸µ /license/claim /license/heartbeat /license/release à¹à¸¥à¹‰à¸§
     """
     def __init__(self, session: AuthSession, device_id: str, port: int, max_concurrent: int=1):
         self.session = session
@@ -172,26 +188,26 @@ class LicenseClient:
 
 # ========= QUICK DEMO (optional) =========
 if __name__ == "__main__":
-    # 1) โหลด config (selectors/branches/times)
+    # 1) à¹‚à¸«à¸¥à¸” config (selectors/branches/times)
     cfg = get_config_all()
     print("sites:", list(cfg.get("sites", {}).keys()))
     print("branches:", len(cfg.get("branches", [])), "times:", len(cfg.get("times", [])))
 
-    # 2) สมัคร/ล็อกอิน (ลองใช้ account ทดสอบของคุณ)
+    # 2) à¸ªà¸¡à¸±à¸„à¸£/à¸¥à¹‡à¸­à¸à¸­à¸´à¸™ (à¸¥à¸­à¸‡à¹ƒà¸Šà¹‰ account à¸—à¸”à¸ªà¸­à¸šà¸‚à¸­à¸‡à¸„à¸¸à¸“)
     # register("alice","P@ssw0rd!","alice@example.com")
     sess = login("alice","P@ssw0rd!", device_id="DESKTOP-1234")
     if not sess:
         raise SystemExit("login failed")
     print("logged in as:", sess.username, sess.role)
 
-    # 3) ตัวอย่าง topup (ถ้าตั้ง INTERNAL_AUTH_SECRET แล้ว)
+    # 3) à¸•à¸±à¸§à¸­à¸¢à¹ˆà¸²à¸‡ topup (à¸–à¹‰à¸²à¸•à¸±à¹‰à¸‡ INTERNAL_AUTH_SECRET à¹à¸¥à¹‰à¸§)
     if INTERNAL_AUTH:
         txid = request_topup(sess.username, 1500, method="Manual", description="Test topup")
         print("TxID:", txid)
         ok = mark_paid(txid, provider="Manual", provider_txn_id="txn-001")
         print("mark paid:", ok)
 
-    # 4) today booking (หาก backend ยังไม่มี endpoint จะได้ False)
+    # 4) today booking (à¸«à¸²à¸ backend à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µ endpoint à¸ˆà¸°à¹„à¸”à¹‰ False)
     print("today open:", is_today_booking_open())
 
 # ========= Compatibility helpers for GUI (file I/O + wrappers) =========
@@ -304,7 +320,7 @@ def load_user_profile_by_name(name: Optional[str]) -> Dict[str, Any]:
                 }
     return load_user_profile()
 
-def register_user(username: str, password: str, role: str = "normal", max_sites: int = 0, can_schedule: str = "ไม่") -> Dict[str, Any]:
+def register_user(username: str, password: str, role: str = "normal", max_sites: int = 0, can_schedule: str = "à¹„à¸¡à¹ˆ") -> Dict[str, Any]:
     """Register user via backend and return a GUI-friendly record.
     Extra parameters are accepted for compatibility but not sent unless backend supports them.
     """
@@ -320,7 +336,11 @@ def get_all_api_data() -> Dict[str, Any]:
     - 'times': list of time strings
     - 'pmrocket'/'ithitec'/'rocketbooking': site selector maps
     """
-    cfg = get_config_all()
+    # Use safe-config fetcher with robust TTL parsing
+    try:
+        cfg = get_config_all_safe()
+    except Exception:
+        cfg = get_config_all()
     sites = cfg.get("sites", {}) if isinstance(cfg, dict) else {}
     def site(name: str) -> Dict[str, Any]:
         if isinstance(sites, dict) and isinstance(sites.get(name), dict):
@@ -333,6 +353,29 @@ def get_all_api_data() -> Dict[str, Any]:
         "ithitec": site("ithitec"),
         "rocketbooking": site("rocketbooking"),
     }
+
+def get_config_all_safe(force: bool=False) -> Dict[str, Any]:
+    """Fetch /config/all with ETag cache, using safe TTL parsing from env."""
+    now = time.time()
+    ttl = _num_env("CONFIG_CACHE_SEC", 300)
+    if not force and _CFG_CACHE["data"] and (now - _CFG_CACHE["ts"] < ttl):
+        return _CFG_CACHE["data"]
+    headers = {}
+    if _CFG_CACHE["etag"]:
+        headers["If-None-Match"] = _CFG_CACHE["etag"]
+    r = requests.get(f"{BACKEND_URL}/config/all", headers=headers, timeout=HTTP_TIMEOUT)
+    if r.status_code == 304 and _CFG_CACHE["data"] is not None:
+        _CFG_CACHE["ts"] = now
+        return _CFG_CACHE["data"]
+    r.raise_for_status()
+    try:
+        data = r.json()
+    except Exception:
+        data = {}
+    _CFG_CACHE["data"] = data
+    _CFG_CACHE["ts"] = now
+    _CFG_CACHE["etag"] = r.headers.get("ETag") or r.headers.get("etag")
+    return data
 
 def google_sheet_check_login(username: str, password: str) -> Optional[Dict[str, Any]]:
     """Compatibility shim: validate credentials via backend login instead of Google Sheet.
@@ -350,14 +393,14 @@ def google_sheet_check_login(username: str, password: str) -> Optional[Dict[str,
     role = str(extra.get("role") or sess.role or "normal").strip().lower()
     expires_at = str(extra.get("expires_at") or sess.expires_at or "")
     # Basic policy for scheduler capability; adjust as needed.
-    can_sched = "ใช่" if role in {"admin", "staff", "premium"} else "ไม่"
+    can_sched = "à¹ƒà¸Šà¹ˆ" if role in {"admin", "staff", "premium"} else "à¹„à¸¡à¹ˆ"
     max_sites = 3 if role in {"admin", "staff", "premium"} else 0
     return {
         "Username": sess.username,
         "Role": role,
         "Expiration date": expires_at,
-        "ตั้งจองล่วงหน้าได้ไหม": can_sched,
-        "สามาถตั้งจองล่วงหน้าได้กี่ site": max_sites,
+        "à¸•à¸±à¹‰à¸‡à¸ˆà¸­à¸‡à¸¥à¹ˆà¸§à¸‡à¸«à¸™à¹‰à¸²à¹„à¸”à¹‰à¹„à¸«à¸¡": can_sched,
+        "à¸ªà¸²à¸¡à¸²à¸–à¸•à¸±à¹‰à¸‡à¸ˆà¸­à¸‡à¸¥à¹ˆà¸§à¸‡à¸«à¸™à¹‰à¸²à¹„à¸”à¹‰à¸à¸µà¹ˆ site": max_sites,
         # expose token for license session
         "token": sess.token,
     }
@@ -377,3 +420,5 @@ def start_license_session(user_info: Dict[str, Any], port: int, version: str = "
         return client if ok else None
     except Exception:
         return None
+
+

@@ -5,11 +5,9 @@ param(
 Write-Host "Configure environment for Newbies app" -ForegroundColor Cyan
 
 $apiToken = Read-Host "Enter API_TOKEN (backend token)"
-$sheetKey = Read-Host "Enter SPREADSHEET_KEY (Google Sheet key)"
 
 $lines = @(
-  "API_TOKEN=$apiToken",
-  "SPREADSHEET_KEY=$sheetKey"
+  "API_TOKEN=$apiToken"
 )
 
 $envPath = Join-Path -Path (Get-Location) -ChildPath ".env"
@@ -18,8 +16,7 @@ Write-Host ".env written at $envPath" -ForegroundColor Green
 
 if ($Persist) {
   setx API_TOKEN $apiToken | Out-Null
-  setx SPREADSHEET_KEY $sheetKey | Out-Null
-  Write-Host "Persisted API_TOKEN and SPREADSHEET_KEY to user environment. Open a new terminal to use them." -ForegroundColor Yellow
+  Write-Host "Persisted API_TOKEN to user environment. Open a new terminal to use it." -ForegroundColor Yellow
 }
 
 Write-Host "Done." -ForegroundColor Cyan
