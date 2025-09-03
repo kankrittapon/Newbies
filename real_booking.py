@@ -138,7 +138,7 @@ async def perform_real_booking(page: Page, all_api_data: dict,
             web_elements = dict(rb_data.get("pmrocket") or {})
         else:
             web_elements = dict(rb_data)
-    target_url = ROCKETBOOKING_URL
+    target_url = (rb_data.get("url") or web_elements.get("url") or ROCKETBOOKING_URL)
     
     if not web_elements:
         if progress_callback:

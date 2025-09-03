@@ -3,7 +3,6 @@ from tkinter import ttk, messagebox
 from tkinter import simpledialog
 from chrome_op import launch_chrome_instance as launch_chrome_with_profile
 from edge_op import launch_edge_with_profile
-from utils import get_all_api_data, google_sheet_check_login
 import threading
 import asyncio
 import time

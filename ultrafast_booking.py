@@ -141,7 +141,8 @@ async def inject_and_book_fast(page: Page, site_data: dict, site_name: str, bran
             raise
 
     log("🌐 เข้าสู่เว็บไซต์...")
-    await page.goto(URLS[site_name], wait_until="networkidle")
+    target_url = web.get("url") or raw.get("url") or URLS.get(site_name)
+    await page.goto(target_url, wait_until="networkidle")
     log("✅ เข้าหน้าเว็บไซต์เรียบร้อยแล้ว")
 
     await wait_for_selector_logged(web["register_button"], "register_button", 15000)

@@ -34,12 +34,25 @@ async def _wait_for_page_ready(p: Page, timeout: int = 15000) -> None:
 # =========================
 _BOOKING_URL = "https://popmartth.rocket-booking.app/booking"
 _BOOKING_MARKER = "body > div > div.sc-715cd296-0.fYuIyy > div > div:nth-child(1) > a > p"
+# API-provided UI helpers (rocketbooking.ui_helpers)
+UI_HELPERS = {}
+
+def set_ui_helpers(ui: dict | None):
+    """Inject UI selectors from API (rocketbooking.ui_helpers)."""
+    try:
+        global UI_HELPERS, _BOOKING_URL, _BOOKING_MARKER
+        if isinstance(ui, dict):
+            UI_HELPERS = ui
+            _BOOKING_URL = UI_HELPERS.get("booking_url") or _BOOKING_URL
+            _BOOKING_MARKER = UI_HELPERS.get("booking_marker") or _BOOKING_MARKER
+    except Exception:
+        pass
 
 async def _click_booking_tab(page: Page) -> bool:
     """
     พยายาม 'กด' ปุ่ม/แท็บ Booking เพื่อกลับหน้า Booking (มากกว่าแค่ goto)
     """
-    candidates = [
+    candidates = UI_HELPERS.get("booking_tab_selectors") or [
         "a[href*='/booking']",
         "a:has-text('Booking')",
         "a:has-text('จอง')",
@@ -145,7 +158,7 @@ async def _wait_for_booking_page(page: Page, timeout: int = 12000) -> bool:
 
 async def _is_booking_logged_in(page: Page) -> bool:
     try:
-        markers = [
+        markers = UI_HELPERS.get("logged_in_markers") or [
             "div.layout-header-profile",
         ]
         for sel in markers:
@@ -167,8 +180,13 @@ async def _fill_profile_if_needed(page: Page, progress_callback=None) -> None:
     """
     try:
         # ตรวจว่ามีฟอร์มหรือไม่
+        pf = UI_HELPERS.get("profile_form") or {}
+        firstname_sel = pf.get("firstname") or "#firstname"
+        lastname_sel = pf.get("lastname") or "#lastname"
+        id_sel = pf.get("id") or "#ID"
+        phone_sel = pf.get("phone") or "#tel"
         need = False
-        for probe in ("#firstname", "#lastname", "#ID", "#tel"):
+        for probe in (firstname_sel, lastname_sel, id_sel, phone_sel):
             try:
                 if await _is_visible(page, probe, 1500):
                     need = True
@@ -190,19 +208,19 @@ async def _fill_profile_if_needed(page: Page, progress_callback=None) -> None:
         # ชื่อ/นามสกุล
         if firstname:
             try:
-                await page.fill("#firstname", firstname)
+                await page.fill(firstname_sel, firstname)
             except Exception:
                 try:
-                    await page.click("#firstname")
+                    await page.click(firstname_sel)
                     await page.keyboard.type(firstname)
                 except Exception:
                     pass
         if lastname:
             try:
-                await page.fill("#lastname", lastname)
+                await page.fill(lastname_sel, lastname)
             except Exception:
                 try:
-                    await page.click("#lastname")
+                    await page.click(lastname_sel)
                     await page.keyboard.type(lastname)
                 except Exception:
                     pass
@@ -213,7 +231,7 @@ async def _fill_profile_if_needed(page: Page, progress_callback=None) -> None:
         if idnum:
             id_label = "บัตรประชาชน" if len(digits) >= 12 else "หนังสือเดินทาง"
 
-        dropdown_candidates = [
+        dropdown_candidates = (pf.get("id_type_dropdown_candidates") if isinstance(pf.get("id_type_dropdown_candidates"), list) else None) or [
             "body > div.sc-3d022901-0.kThiLE > div:nth-child(3) > div.sc-7d3b8656-0.hPTdmW > div.sc-48e8cede-3.iNSrMp > form > div > div:nth-child(5) > div",
             ".ant-select",
             "div[role='combobox']",
@@ -230,7 +248,8 @@ async def _fill_profile_if_needed(page: Page, progress_callback=None) -> None:
                 continue
 
         if id_label and opened:
-            option_sels = [
+            opt_tpl = pf.get("id_type_options_template")
+            option_sels = [opt_tpl.format(id_label)] if opt_tpl else [
                 f"div.ant-select-item-option:has-text('{id_label}')",
                 f"div[role='option']:has-text('{id_label}')",
                 f"span:has-text('{id_label}')",
@@ -246,25 +265,25 @@ async def _fill_profile_if_needed(page: Page, progress_callback=None) -> None:
         # ID / Phone
         if idnum:
             try:
-                await page.fill("#ID", idnum)
+                await page.fill(id_sel, idnum)
             except Exception:
                 try:
-                    await page.click("#ID")
+                    await page.click(id_sel)
                     await page.keyboard.type(idnum)
                 except Exception:
                     pass
         if phone:
             try:
-                await page.fill("#tel", phone)
+                await page.fill(phone_sel, phone)
             except Exception:
                 try:
-                    await page.click("#tel")
+                    await page.click(phone_sel)
                     await page.keyboard.type(phone)
                 except Exception:
                     pass
 
         # checkbox
-        checkbox_candidates = [
+        checkbox_candidates = (pf.get("profile_checkbox_candidates") if isinstance(pf.get("profile_checkbox_candidates"), list) else None) or [
             "body > div.sc-3d022901-0.kThiLE > div:nth-child(3) > div.sc-7d3b8656-0.hPTdmW > div.sc-48e8cede-3.iNSrMp > form > div > div.sc-48e8cede-10.cRNIPZ > label > span.ant-checkbox.ant-wave-target.css-kghr11 > input",
             "form input[type='checkbox']",
             "input[type='checkbox']",
@@ -281,7 +300,7 @@ async def _fill_profile_if_needed(page: Page, progress_callback=None) -> None:
                     continue
 
         # NEXT / ยืนยัน
-        next_candidates = [
+        next_candidates = (pf.get("profile_next_buttons") if isinstance(pf.get("profile_next_buttons"), list) else None) or [
             "body > div.sc-3d022901-0.kThiLE > div:nth-child(3) > div.sc-7d3b8656-0.hPTdmW > div.sc-48e8cede-3.iNSrMp > form > button",
             "form button[type='submit']",
             "button:has-text('NEXT')",
@@ -313,7 +332,7 @@ async def _check_profile_completed(page: Page, progress_callback=None) -> bool:
     """
     try:
         # กดเปิดโปรไฟล์ถ้าทำได้
-        triggers = [
+        triggers = UI_HELPERS.get("profile_triggers") or [
             "a:has-text('โปรไฟล์')",
             "button:has-text('โปรไฟล์')",
             "a:has-text('Profile')",
@@ -331,7 +350,7 @@ async def _check_profile_completed(page: Page, progress_callback=None) -> bool:
                 continue
 
         # probes ที่บอกว่าอยู่หน้าโปรไฟล์
-        probes = [
+        probes = UI_HELPERS.get("profile_markers") or [
             "body > div > div.sc-396c748-0.fRdeIf > div.layouts-profile > div",
             "body > div > div.sc-396c748-0.fRdeIf > div.wrapper-setting-profile > div.content-setting-profile",
             "div.layout-header-profile",
@@ -449,7 +468,14 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
                 continue
 
         # กรณีอยู่หน้า Booking และมีปุ่ม Connect LINE
-        connect_selector = "button:has-text('Connect LINE'), button:has-text('Connect')"
+        connect_selector = ", ".join(UI_HELPERS.get("connect_line_buttons") or [
+            "button:has-text('Connect LINE')",
+            "button:has-text('Connect')",
+            "a:has-text('Connect LINE')",
+            "a:has-text('Connect')",
+            "button:has-text('เชื่อมต่อ LINE')",
+            "a:has-text('เชื่อมต่อ LINE')",
+        ])
         if await _is_visible(page, connect_selector, 3000):
             if progress_callback:
                 progress_callback("ℹ️ พบปุ่ม Connect LINE กำลังกด...")
@@ -457,7 +483,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
             await _wait_for_page_ready(page, 15000)
             # ปุ่ม Connect LINE Account ชั้นถัดไป
             try:
-                second_sel_list = [
+                second_sel_list = UI_HELPERS.get("connect_line_next_buttons") or [
                     "button:has-text('Connect LINE Account')",
                     "a:has-text('Connect LINE Account')",
                     "button:has-text('Connect Account')",
@@ -513,7 +539,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
 
         # Quick Login ปุ่มเดี่ยว (ไม่ต้องกรอก)
         try:
-            quick_login_selectors = [
+            quick_login_selectors = UI_HELPERS.get("quick_login_buttons") or [
                 "#app > div > div > div > div > div > div.LyContents01 > div > div.login-button > button",
                 "div.login-button > button",
                 "button:has-text('LOGIN')",
@@ -562,7 +588,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
             pass
 
         # ถ้าต้องกรอก email/password
-        email_candidates = [
+        email_candidates = UI_HELPERS.get("email_fields") or [
             "#app > div > div > div > div.MdBox01 > div > form > fieldset > div:nth-child(2) > input[type=text]",
             "input[type='email']",
             "input[name='tid']",
@@ -570,7 +596,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
             "input[placeholder*='Email' i]",
             "input[placeholder*='อีเมล']",
         ]
-        pass_candidates = [
+        pass_candidates = UI_HELPERS.get("password_fields") or [
             "#app > div > div > div > div.MdBox01 > div > form > fieldset > div:nth-child(3) > input[type=password]",
             "input[type='password']",
             "input[name='tpassword']",
@@ -578,7 +604,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
             "input[placeholder*='Password' i]",
             "input[placeholder*='รหัส']",
         ]
-        login_btn_candidates = [
+        login_btn_candidates = UI_HELPERS.get("submit_login_buttons") or [
             "#app > div > div > div > div.MdBox01 > div > form > fieldset > div.mdFormGroup01Btn > button",
             "button[type='submit']",
             "button:has-text('Log in')",
@@ -589,7 +615,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
 
         # toggle ไปหน้า email ถ้ายังไม่เห็นช่อง
         try:
-            email_toggle_selectors = [
+            email_toggle_selectors = UI_HELPERS.get("email_toggle_selectors") or [
                 "button:has-text('Log in with email')",
                 "a:has-text('Log in with email')",
                 "button:has-text('Email')",
@@ -599,7 +625,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
                 "button:has-text('อีเมล')",
                 "a:has-text('อีเมล')",
             ]
-            probe_email = ", ".join([
+            probe_email = ", ".join(UI_HELPERS.get("email_probe") or [
                 "input[type='email']",
                 "input[name='tid']",
                 "input[name='username']",
@@ -719,7 +745,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
             pass
 
         # รอ OTP ถ้ามี แต่ยอมให้ออกได้เมื่อหายไป/รีไดเรกต์เสร็จ
-        otp_box = "#app > div > div > div > div > div > div.MdMN06DigitCode > div.mdMN06CodeBox"
+        otp_box = UI_HELPERS.get("otp_box") or "#app > div > div > div > div > div > div.MdMN06DigitCode > div.mdMN06CodeBox"
         otp_seen = False
         for _ in range(240):  # ~120s
             try:
@@ -744,7 +770,7 @@ async def perform_line_login(page: Page, progress_callback=None, preferred_email
 
         # ยืนยัน consent ถ้ามี
         try:
-            consent_sel = ", ".join([
+            consent_sel = ", ".join(UI_HELPERS.get("consent_buttons") or [
                 "button:has-text('Agree')",
                 "button:has-text('Allow')",
                 "button:has-text('ยอมรับ')",

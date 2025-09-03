@@ -70,9 +70,15 @@ async def launch_browser_and_perform_booking(browser_type: str, site_name: str,
 
     target_url = ""
     if site_name == "PMROCKET":
-        target_url = PMROCKET_URL
+        try:
+            target_url = (all_api_data.get("pmrocket", {}) or {}).get("url") or PMROCKET_URL
+        except Exception:
+            target_url = PMROCKET_URL
     elif site_name == "EZBOT":
-        target_url = EZBOT_URL
+        try:
+            target_url = (all_api_data.get("ithitec", {}) or {}).get("url") or EZBOT_URL
+        except Exception:
+            target_url = EZBOT_URL
     else:
         print("Invalid site name specified.")
         return
