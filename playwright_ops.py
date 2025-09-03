@@ -99,7 +99,8 @@ async def launch_browser_and_perform_booking(browser_type: str, site_name: str,
 
         browser = None
         if browser_type == "Chrome":
-            browser = await p.chromium.launch(**browser_launch_options)
+            # Use system-installed Google Chrome to avoid downloading Playwright's Chromium
+            browser = await p.chromium.launch(channel="chrome", **browser_launch_options)
         elif browser_type == "Edge":
             browser = await p.chromium.launch(channel="msedge", **browser_launch_options)
         

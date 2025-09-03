@@ -1,5 +1,8 @@
-fastapi==0.112.2
-uvicorn[standard]==0.30.5
-stripe==7.8.1
 requests==2.32.3
-playwright==1.45.0
+# Playwright >= 1.48 supports Python 3.13 (pins greenlet >= 3.1.x)
+playwright>=1.48.0
+
+# Notes for export/build:
+# - Nuitka is a build tool (not needed at runtime). Use requirements-build.txt
+# - After installing Playwright, run: `playwright install chromium` (or the browsers you need)
+# - If you must stay on Playwright 1.45.x, use Python 3.12 instead of 3.13 to avoid greenlet build errors.
