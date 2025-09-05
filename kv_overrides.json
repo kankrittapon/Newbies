@@ -1,0 +1,300 @@
+{
+  "version": "2025-09-04T00:00:00Z",
+  "urls": {
+    "rocketbooking": "https://popmartth.rocket-booking.app/booking",
+    "pmrocket": "https://pmrocketbotautoq.web.app/",
+    "ezbot": "https://popmart.ithitec.com/"
+  },
+  "branchs": [
+    "Terminal 21",
+    "Centralworld",
+    "Central Ladprao",
+    "Fashion Island",
+    "MEGABANGA",
+    "Siam Center",
+    "Siam Square",
+    "Emsphere",
+    "Central Pattaya",
+    "Seacon Square",
+    "Central Westgate",
+    "Central Chiangmai",
+    "Icon Siam",
+    "Central Park"
+  ],
+  "times": [
+    "10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30",
+    "15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30","19:00",
+    "19:30","20:00","20:30"
+  ],
+  "ithitec": {
+    "url": "https://popmart.ithitec.com/",
+    "register_button": "#step-register > div > div > div.event-card > div.register-section > div > button",
+    "branch_list": "#branch-list-container",
+    "branch_buttons": "#branch-list-container",
+    "branch_next_button": "#branch-next-btn",
+    "datetime_next_button": "#datetime-next-btn",
+    "checkbox": "#terms-checkbox",
+    "confirm_button": "#final-book-btn",
+    "time_select_section_selector": "div.time-select-section",
+    "time_buttons_base_selector": "#time-slots-grid"
+  },
+  "pmrocket": {
+    "url": "https://pmrocketbotautoq.web.app/",
+    "register_button": "#root > div > div.step > div > button",
+    "branch_list": "#root > div > div.step > div > div",
+    "branch_buttons": "#root > div > div.step > div > div",
+    "branch_next_button": "#root > div > div.step > div > button",
+    "calendar_day_button_prefix": "#calendar-grid > button:nth-child(",
+    "time_buttons_prefix": "#root > div > div.step > div > div.button-grid > button:nth-child(",
+    "datetime_next_button": "#root > div > div.step > div > button",
+    "checkbox": "#final-checkbox",
+    "confirm_button": "#root > div > div.step > div > button",
+    "ui_helpers": {
+      "booking_url": "https://pmrocketbotautoq.web.app/",
+      "profile_triggers": [
+        "a:has-text('โปรไฟล์')",
+        "button:has-text('โปรไฟล์')",
+        "a:has-text('Profile')",
+        "button:has-text('Profile')"
+      ],
+      "profile_markers": [
+        "div.layout-header-profile",
+        "div.wrapper-setting-profile",
+        "div.layouts-profile"
+      ],
+      "connect_line_texts": [
+        "Connect LINE",
+        "Connect",
+        "เชื่อมต่อ LINE",
+        "เชื่อมต่อ"
+      ]
+    }
+  },
+  "rocketbooking": {
+    "url": "https://popmartth.rocket-booking.app/booking",
+    "pmrocket": {
+      "open_date_container": "div.open-date",
+      "main_container": "div.sc-98fa634e-5.lePVIt",
+      "register_button": "div.register",
+      "branch_buttons_base": "div.branch-item",
+      "next_button_after_branch": "div > div.btn-section > button",
+      "date_picker_container": "div.wholePage.datePicker",
+      "next_month_button": "button[aria-label='Next month']",
+      "date_button": "button:has-text('{}')",
+      "time_button": "button:has-text('{}')",
+      "confirm_selection_button": "div.open-date > div.register",
+      "checkbox": "input[type='checkbox']",
+      "confirm_booking_button": "div.open-date > div.register"
+    },
+    "ui_helpers": {
+      "booking_url": "https://popmartth.rocket-booking.app/booking",
+      "booking_marker": "body > div > div.sc-715cd296-0.fYuIyy > div > div:nth-child(1) > a > p",
+      "booking_tab_selectors": [
+        "a[href*='/booking']",
+        "a:has-text('Booking')",
+        "a:has-text('จอง')",
+        "a:has-text('จองคิว')",
+        "button:has-text('Booking')",
+        "button:has-text('จองคิว')",
+        "a:has-text('หน้าจอง')"
+      ],
+      "logged_in_markers": [
+        "div.layout-header-profile"
+      ],
+      "profile_triggers": [
+        "a:has-text('โปรไฟล์')",
+        "button:has-text('โปรไฟล์')",
+        "a:has-text('Profile')",
+        "button:has-text('Profile')",
+        "body > div > div.sc-715cd296-0.fYuIyy > div > div:nth-child(3) > a > p",
+        "body > div > div.sc-715cd296-0.fYuIyy > div > div:nth-child(3) > a > div > img"
+      ],
+      "profile_markers": [
+        "body > div > div.sc-396c748-0.fRdeIf > div.layouts-profile > div",
+        "body > div > div.sc-396c748-0.fRdeIf > div.wrapper-setting-profile > div.content-setting-profile",
+        "div.layout-header-profile",
+        "body > div > div.sc-396c748-0.fRdeIf > div.layouts-profile > div > div.img-profile > img",
+        "body > div > div.sc-396c748-0.fRdeIf > div.layouts-profile > div > div.fullname"
+      ],
+      "profile_avatar": [
+        "body > div > div.sc-396c748-0.fRdeIf > div.layouts-profile > div > div.img-profile > img",
+        "img[alt='Profile']"
+      ],
+      "profile_fullname": [
+        "div.fullname",
+        "div.wrapper-setting-profile h1",
+        "div.layouts-profile h1"
+      ],
+      "logout_buttons": [
+        "p.textred:has-text('ออกจากระบบ')",
+        "button:has-text('ออกจากระบบ')",
+        "a:has-text('ออกจากระบบ')",
+        "button:has-text('Logout')",
+        "a:has-text('Logout')"
+      ],
+      "profile_login_buttons": [
+        "button:has-text('LOGIN')",
+        "button:has-text('Login')",
+        "button:has-text('เข้าสู่ระบบ')"
+      ],
+      "connect_line_texts": [
+        "Connect LINE",
+        "Connect",
+        "เชื่อมต่อ LINE",
+        "เชื่อมต่อ"
+      ],
+      "connect_line_buttons": [
+        "button.sc-48e8cede-5.goYoKf",
+        "body > div > div.sc-396c748-0.fRdeIf > div.ant-flex.css-kghr11.ant-flex-align-center.ant-flex-justify-center.ant-flex-vertical > button",
+        "div:has-text('กรุณาเชื่อมต่อบัญชี LINE') >> button",
+        "body > div > div.sc-396c748-0.fRdeIf > div.ant-flex.css-kghr11.ant-flex-align-center.ant-flex-justify-center.ant-flex-vertical > button",
+        "xpath=/html/body/div/div[1]/div[3]/button",
+        "button:has-text('Connect LINE')",
+        "button:has-text('Connect')",
+        "a:has-text('Connect LINE')",
+        "a:has-text('Connect')",
+        "button:has-text('เชื่อมต่อ LINE')",
+        "a:has-text('เชื่อมต่อ LINE')"
+      ],
+      "connect_prompt_selectors": [
+        "body > div > div.sc-396c748-0.fRdeIf > div.ant-flex.css-kghr11.ant-flex-align-center.ant-flex-justify-center.ant-flex-vertical > div",
+        "div:has-text('กรุณาเชื่อมต่อบัญชี LINE')"
+      ],
+      "connect_line_next_buttons": [
+        ".sc-48e8cede-5.goYoKf",
+        "text=/\\bConnect\\s+LINE\\s+Account\\??/i",
+        "text=/เชื่อมต่อบัญชี\\s*LINE\\s*\\??/i",
+        "button:has-text('Connect LINE Account')",
+        "a:has-text('Connect LINE Account')",
+        "button:has-text('Connect Account')",
+        "a:has-text('Connect Account')",
+        "button:has-text('เชื่อมต่อบัญชี LINE')",
+        "a:has-text('เชื่อมต่อบัญชี LINE')",
+        "body > div > div:nth-child(3) > div.sc-7d3b8656-0.hPTdmW > div.sc-48e8cede-3.iNSrMp > button"
+      ],
+      "connect_overlay_title_selectors": [
+        "body > div > div:nth-child(3) > div.sc-7d3b8656-0.hPTdmW > div.sc-48e8cede-3.iNSrMp > div > div.sc-48e8cede-4.gPCRrg",
+        "div:has-text('Sign-in / Sign-up')"
+      ],
+      "connect_overlay_candidates": [
+        "div.sc-7d3b8656-0.hPTdmW",
+        "div.sc-48e8cede-3.iNSrMp",
+        ".sc-48e8cede-5.goYoKf",
+        "div.ant-flex.css-kghr11.ant-flex-align-center.ant-flex-justify-center.ant-flex-vertical"
+      ],
+      "quick_login_buttons": [
+        "#app > div > div > div > div > div > div.LyContents01 > div > div.login-button > button",
+        "#app > div > div > div > div > div > div.LyContents01 > div > div.login-button > button > span",
+        "div.login-button > button",
+        "button:has-text('LOGIN')",
+        "button:has-text('Login')",
+        "button:has-text('เข้าสู่ระบบ')"
+      ],
+      "email_fields": [
+        "#app > div > div > div > div.MdBox01 > div > form > fieldset > div:nth-child(2) > input[type=text]",
+        "input[type='email']",
+        "input[name='tid']",
+        "input[name='username']",
+        "input[placeholder*='Email' i]",
+        "input[placeholder*='อีเมล']"
+      ],
+      "password_fields": [
+        "#app > div > div > div > div.MdBox01 > div > form > fieldset > div:nth-child(3) > input[type=password]",
+        "input[type='password']",
+        "input[name='tpasswd']",
+        "input[name='password']",
+        "input[placeholder*='Password' i]",
+        "input[placeholder*='รหัส']"
+      ],
+      "submit_login_buttons": [
+        "#app > div > div > div > div.MdBox01 > div > form > fieldset > div.mdFormGroup01Btn > button",
+        "button[type='submit']",
+        "button:has-text('Log in')",
+        "button:has-text('Login')",
+        "button:has-text('Sign in')",
+        "button:has-text('เข้าสู่ระบบ')"
+      ],
+      "email_toggle_selectors": [
+        "button:has-text('Log in with email')",
+        "a:has-text('Log in with email')",
+        "button:has-text('Email')",
+        "a:has-text('Email')",
+        "button:has-text('เข้าสู่ระบบด้วยอีเมล')",
+        "a:has-text('เข้าสู่ระบบด้วยอีเมล')",
+        "button:has-text('อีเมล')",
+        "a:has-text('อีเมล')"
+      ],
+      "email_probe": [
+        "input[type='email']",
+        "input[name='tid']",
+        "input[name='username']",
+        "input[placeholder*='Email' i]",
+        "input[placeholder*='อีเมล']"
+      ],
+      "otp_box": "#app > div > div > div > div > div > div.MdMN06DigitCode > div.mdMN06CodeBox",
+      "otp_title_selectors": [
+        "#app > div > div > div > div > div > div.MdMN06DigitCode > h2 > span",
+        "span:has-text('Your verification code')"
+      ],
+      "otp_digit_selector": "#app > div > div > div > div > div > div.MdMN06DigitCode > div.mdMN06CodeBox > p.mdMN06Number",
+      "consent_buttons": [
+        "button:has-text('Agree')",
+        "button:has-text('Allow')",
+        "button:has-text('ยอมรับ')",
+        "button:has-text('อนุญาต')"
+      ],
+      "extra_confirm_containers": [
+        "div.wholePage.datePicker",
+        "div.InfoPage"
+      ],
+      "confirm_button_text_regex": "Confirm|ยืนยัน",
+      "profile_form": {
+        "firstname": "#firstname",
+        "lastname": "#lastname",
+        "id": "#ID",
+        "phone": "#tel",
+        "id_type_dropdown_candidates": [
+          ".ant-select",
+          "div[role='combobox']",
+          "span.ant-select-selection-search input[role='combobox']"
+        ],
+        "id_type_options_template": "div[role='option']:has-text('{}')",
+        "profile_checkbox_candidates": [
+          "form input[type='checkbox']",
+          "input[type='checkbox']"
+        ],
+        "profile_next_buttons": [
+          "form button[type='submit']",
+          "button:has-text('NEXT')",
+          "button:has-text('Next')",
+          "button:has-text('ถัดไป')",
+          "button:has-text('ยืนยัน')"
+        ]
+      },
+      "minigame": {
+        "canvas": "#app canvas",
+        "status_text": "#status-text"
+      },
+      "probes": {
+        "logo": "img.logo"
+      },
+      "sold_out_selectors": [
+        "body > div > div.sc-aca0017e-0.jjHlPO > div > div > div.sc-aca0017e-4.fRoKPl > img",
+        "body > div > div.sc-aca0017e-0.jjHlPO > div > div > div.sc-aca0017e-2.fiEaxP",
+        "body > div > div.sc-aca0017e-0.jjHlPO > div > div > button"
+      ],
+      "no_event_selectors": [
+        "body > div > div.sc-98fa634e-0.fvTCUd > div.ant-flex.css-kghr11.ant-flex-align-center.ant-flex-justify-center.ant-flex-vertical > div > img"
+      ],
+      "no_event_texts": [
+        "ไม่มีอีเว้นต์ในขณะนี้"
+      ]
+    },
+    "bot_check": {
+      "begin_button": "#amzn-captcha-verify-button",
+      "captcha_title": "div.amzn-captcha-modal-title",
+      "captcha_images": "div[style='position: relative;'] > canvas + button",
+      "confirm_button": "#amzn-btn-verify-internal"
+    }
+  }
+}

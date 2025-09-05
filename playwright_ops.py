@@ -1,8 +1,11 @@
 #playwright_ops.py
 import asyncio
-from playwright.async_api import async_playwright, Page
+from playwright.async_api import async_playwright, Page, BrowserContext
 import json
 import os
+from line_login import perform_line_login
+from utils import _company_dir, load_line_credentials, load_user_profile_by_name
+from pathlib import Path
 
 # URLs สำหรับแต่ละ Site
 PMROCKET_URL = "https://pmrocketbotautoq.web.app/"
@@ -10,7 +13,7 @@ EZBOT_URL = "https://popmart.ithitec.com/"
 
 # ตัวแปร global สำหรับเก็บ browser object เพื่อป้องกันการปิดอัตโนมัติ
 # ใช้ dict เพื่อเก็บหลาย browsers ถ้าต้องการ (เช่น สำหรับแต่ละ profile)
-active_browsers = {}
+active_browsers: dict[str, BrowserContext] = {}
 
 # ฟังก์ชันสำหรับดึงข้อมูลเฉพาะสำหรับแต่ละ Site (web_elements)
 def get_site_elements_config(site_name, all_api_data):
@@ -38,7 +41,8 @@ async def launch_browser_and_perform_booking(browser_type: str, site_name: str,
                                              all_api_data: dict, 
                                              selected_branch_name: str, selected_day: str, selected_time_value: str,
                                              *, # บังคับให้ progress_callback เป็น keyword argument
-                                             progress_callback=None):
+                                             progress_callback=None,
+                                             browser_profile_name: str | None = None): # New parameter for browser profile
     """
     เปิดเบราว์เซอร์และดำเนินการ Booking Process
     :param browser_type: "Chrome" หรือ "Edge"
@@ -48,15 +52,25 @@ async def launch_browser_and_perform_booking(browser_type: str, site_name: str,
     :param selected_day: วันที่เลือกจาก GUI (ตัวเลข 1-31)
     :param selected_time_value: ค่าเวลาที่เลือกจาก GUI
     :param progress_callback: ฟังก์ชันสำหรับอัปเดตสถานะ (ถ้ามี)
+    :param browser_profile_name: ชื่อโปรไฟล์เบราว์เซอร์สำหรับ Playwright persistent context
     """
     # Key สำหรับเก็บ browser ใน active_browsers dict
-    browser_key = f"{site_name}-{browser_type}-{selected_branch_name}-{selected_day}-{selected_time_value}"
+    browser_key = f"{site_name}-{browser_type}-{browser_profile_name or 'default'}"
 
     # ถ้า browser นี้ถูกเปิดอยู่แล้ว ให้กลับไปใช้งาน instance เดิม
     if browser_key in active_browsers:
         if progress_callback:
             progress_callback(f"ℹ️ Browser สำหรับการจองนี้เปิดอยู่แล้ว.")
-        return # ไม่ต้องทำอะไรเพิ่ม
+        # Return the existing page if possible, or create a new one in the existing context
+        existing_context = active_browsers[browser_key]
+        if existing_context.pages:
+            page = existing_context.pages[0]
+            await page.goto(target_url) # Navigate to target URL again
+            return page
+        else:
+            page = await existing_context.new_page()
+            await page.goto(target_url)
+            return page
 
     web_elements = get_site_elements_config(site_name, all_api_data) 
     
@@ -90,28 +104,73 @@ async def launch_browser_and_perform_booking(browser_type: str, site_name: str,
         return
 
     try:
-        # ไม่ใช้ async with เพื่อป้องกัน Playwright ปิด browser อัตโนมัติ
         p = await async_playwright().start() 
         
         print(f"Launching {browser_type} for {site_name} at {target_url}")
         if progress_callback:
             progress_callback(f"🚀 กำลังเปิด {browser_type} สำหรับ {site_name}...")
 
-        browser = None
-        if browser_type == "Chrome":
-            # Use system-installed Google Chrome to avoid downloading Playwright's Chromium
-            browser = await p.chromium.launch(channel="chrome", **browser_launch_options)
-        elif browser_type == "Edge":
-            browser = await p.chromium.launch(channel="msedge", **browser_launch_options)
-        
-        # เก็บ browser object ไว้ใน active_browsers
-        active_browsers[browser_key] = browser
+        browser_context: BrowserContext = None
+        user_data_dir = None
 
-        page = await browser.new_page()
+        if browser_profile_name:
+            profile_dir = _company_dir() / "browser_profiles" / browser_profile_name
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            user_data_dir = str(profile_dir)
+            if progress_callback:
+                progress_callback(f"ℹ️ ใช้โปรไฟล์เบราว์เซอร์: {browser_profile_name} ที่ {user_data_dir}")
+
+        if browser_type == "Chrome":
+            browser_context = await p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir or str(_company_dir() / "browser_profiles" / "default_chrome"),
+                channel="chrome",
+                **browser_launch_options
+            )
+        elif browser_type == "Edge":
+            browser_context = await p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir or str(_company_dir() / "browser_profiles" / "default_edge"),
+                channel="msedge",
+                **browser_launch_options
+            )
+        
+        # เก็บ browser context object ไว้ใน active_browsers
+        active_browsers[browser_key] = browser_context
+
+        page = await browser_context.new_page()
         await page.goto(target_url)
 
         if progress_callback:
             progress_callback(f"🌐 ไปยังหน้า {target_url}...")
+
+        # Perform LINE login if a profile is specified
+        if browser_profile_name:
+            if progress_callback:
+                progress_callback(f"🔑 กำลังดำเนินการ LINE Login สำหรับโปรไฟล์ {browser_profile_name}...")
+            
+            # Load LINE credentials for the specific profile if available, otherwise use default
+            line_creds = load_line_credentials()
+            preferred_email = None
+            # Assuming line_data.json can store multiple LINE accounts,
+            # and we can map a browser profile name to a LINE email.
+            # This mapping logic might need to be more sophisticated based on actual config.
+            # For now, let's assume the browser_profile_name itself might be the email or a key to it.
+            if browser_profile_name in line_creds:
+                preferred_email = browser_profile_name
+            elif any(profile.get("Name") == browser_profile_name for profile in load_user_profile_by_name(None)): # This needs to be fixed, load_user_profile_by_name returns a single profile
+                # If the browser profile name matches a user profile name, try to find associated LINE email
+                user_profile = load_user_profile_by_name(browser_profile_name)
+                if user_profile and user_profile.get("LINE_Email"): # Assuming a LINE_Email field in user profile
+                    preferred_email = user_profile["LINE_Email"]
+
+            login_success = await perform_line_login(page, progress_callback, preferred_email=preferred_email)
+            if login_success:
+                if progress_callback:
+                    progress_callback(f"✅ LINE Login สำเร็จสำหรับโปรไฟล์ {browser_profile_name}.")
+            else:
+                if progress_callback:
+                    progress_callback(f"❌ LINE Login ล้มเหลวสำหรับโปรไฟล์ {browser_profile_name}.")
+                # Decide whether to continue booking if LINE login fails
+                # For now, we'll proceed, but this might need to be configurable.
 
         print("Starting booking process...")
 

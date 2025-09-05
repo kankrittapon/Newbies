@@ -69,7 +69,7 @@ async def attach_to_chrome(port: int = 0, progress_callback=None):
 async def safe_click(page: Page, selector: str, bot_elements: dict, progress_callback=None, retries=3):
     for attempt in range(1, retries + 1):
         try:
-            await page.click(selector, timeout=10000)
+            await page.click(selector, timeout=4000)
             return True
         except PlaywrightTimeoutError:
             if progress_callback:
@@ -86,7 +86,7 @@ async def safe_click(page: Page, selector: str, bot_elements: dict, progress_cal
         progress_callback(f"❌ ไม่สามารถคลิก '{selector}' ได้หลังลอง {retries} ครั้ง")
     return False
 
-async def safe_wait_for_selector(page: Page, selector: str, bot_elements: dict, progress_callback=None, timeout=30000, retries=3):
+async def safe_wait_for_selector(page: Page, selector: str, bot_elements: dict, progress_callback=None, timeout=12000, retries=3):
     for attempt in range(1, retries + 1):
         try:
             await page.wait_for_selector(selector, state="visible", timeout=timeout)
@@ -155,6 +155,13 @@ async def perform_real_booking(
     if progress_callback:
         progress_callback(f"🚀 กำลังเข้าสู่เว็บไซต์ {site_name} และตรวจสอบบอท...")
 
+    # Fast-path: tighten default timeouts to reduce stalls
+    try:
+        page.set_default_timeout(7000)
+        page.set_default_navigation_timeout(10000)
+    except Exception:
+        pass
+
     # ปรับ map คีย์ selector ให้ครอบคลุม payload เดิม
     try:
         if "date_button" not in web_elements and web_elements.get("calendar_day_button_prefix"):
@@ -175,7 +182,7 @@ async def perform_real_booking(
     except Exception:
         pass
 
-    await page.goto(target_url, wait_until="networkidle")
+    await page.goto(target_url, wait_until="domcontentloaded")
 
     # รีโหลดกรณีหน้าไม่สมบูรณ์
     try:
@@ -224,19 +231,37 @@ async def perform_real_booking(
             except Exception:
                 pass
 
+            # Probe แบบเร็ว: ใช้ exact-text + visible เฉพาะในหน้าโปรไฟล์ เพื่อลด false positive
             try:
-                connect_probe = ", ".join([
-                    "button:has-text('Connect LINE')",
-                    "button:has-text('Connect')",
-                    "a:has-text('Connect LINE')",
-                    "a:has-text('Connect')",
-                    "button:has-text('เชื่อมต่อ LINE')",
-                    "a:has-text('เชื่อมต่อ LINE')",
-                ])
-                for _ in range(10):
-                    if await page.is_visible(connect_probe, timeout=1000):
+                for _ in range(8):
+                    found = await page.evaluate(
+                        "(tokens, markerSelectors) => {\n"
+                        "  const isVisible = (el) => {\n"
+                        "    if (!el) return false;\n"
+                        "    const r = el.getBoundingClientRect();\n"
+                        "    const s = window.getComputedStyle(el);\n"
+                        "    return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none';\n"
+                        "  };\n"
+                        "  const eq = (a,b) => (a||'').trim()===(b||'').trim();\n"
+                        "  const roots = [];\n"
+                        "  for (const sel of (markerSelectors||[])) { const c=document.querySelector(sel); if(c) roots.push(c); }\n"
+                        "  if (!roots.length) roots.push(document);\n"
+                        "  for (const root of roots){\n"
+                        "    const nodes = Array.from(root.querySelectorAll('button,a'));\n"
+                        "    for (const n of nodes){ const t=(n.innerText||'').trim(); if(tokens.some(tok=>eq(t,tok)) && isVisible(n)) return true; }\n"
+                        "  }\n"
+                        "  return false;\n"
+                        "}",
+                        ["Connect LINE","Connect","เชื่อมต่อ LINE","เชื่อมต่อ"],
+                        [
+                            "body > div > div.sc-396c748-0.fRdeIf > div.layouts-profile > div",
+                            "body > div > div.sc-396c748-0.fRdeIf > div.wrapper-setting-profile > div.content-setting-profile",
+                            "div.layout-header-profile",
+                        ],
+                    )
+                    if found:
                         break
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.25)
             except Exception:
                 pass
 
@@ -254,15 +279,31 @@ async def perform_real_booking(
 
     # แจ้งเตือนถ้าเห็น Connect LINE แต่ไม่ได้ติ๊ก auto
     try:
-        connect_sel = ", ".join([
-            "button:has-text('Connect LINE')",
-            "button:has-text('Connect')",
-            "a:has-text('Connect LINE')",
-            "a:has-text('Connect')",
-            "button:has-text('เชื่อมต่อ LINE')",
-            "a:has-text('เชื่อมต่อ LINE')",
-        ])
-        need_login = await page.is_visible(connect_sel, timeout=2000)
+        need_login = await page.evaluate(
+            "(tokens, markerSelectors) => {\n"
+            "  const isVisible = (el) => {\n"
+            "    if (!el) return false;\n"
+            "    const r = el.getBoundingClientRect();\n"
+            "    const s = window.getComputedStyle(el);\n"
+            "    return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none';\n"
+            "  };\n"
+            "  const eq = (a,b) => (a||'').trim()===(b||'').trim();\n"
+            "  const roots = [];\n"
+            "  for (const sel of (markerSelectors||[])) { const c=document.querySelector(sel); if(c) roots.push(c); }\n"
+            "  if (!roots.length) roots.push(document);\n"
+            "  for (const root of roots){\n"
+            "    const nodes = Array.from(root.querySelectorAll('button,a'));\n"
+            "    for (const n of nodes){ const t=(n.innerText||'').trim(); if(tokens.some(tok=>eq(t,tok)) && isVisible(n)) return true; }\n"
+            "  }\n"
+            "  return false;\n"
+            "}",
+            ["Connect LINE","Connect","เชื่อมต่อ LINE","เชื่อมต่อ"],
+            [
+                "body > div > div.sc-396c748-0.fRdeIf > div.layouts-profile > div",
+                "body > div > div.sc-396c748-0.fRdeIf > div.wrapper-setting-profile > div.content-setting-profile",
+                "div.layout-header-profile",
+            ],
+        )
     except Exception:
         need_login = False
     if (not auto_line_login) and need_login and progress_callback:
@@ -378,36 +419,36 @@ async def perform_real_booking(
     branch_buttons_base_selector = web_elements.get("branch_buttons_base")
     branch_found = False
     for _ in range(5):
-        branch_selector = f"{branch_buttons_base_selector}:has-text('{selected_branch}')"
-        if await page.is_visible(branch_selector):
-            if delay_seconds:
-                try:
-                    await page.wait_for_timeout(int(float(delay_seconds) * 1000))
-                except Exception:
-                    pass
-            if not await safe_click(page, branch_selector, bot_elements, progress_callback):
-                # If cannot click target branch, try fallback to any clickable branch
-                if enable_fallback:
+        clicked_target_branch = False
+        try:
+            # 1) พยายามคลิกข้อความสาขาแบบ exact ภายใน container ที่กำหนด
+            container = page.locator(branch_buttons_base_selector)
+            target = container.get_by_text(str(selected_branch), exact=True)
+            if await target.count() > 0:
+                if delay_seconds:
                     try:
-                        btns = page.locator(f"{branch_buttons_base_selector} button, {branch_buttons_base_selector} [role='button']")
-                        cnt = await btns.count()
-                        for i in range(cnt):
-                            b = btns.nth(i)
-                            try:
-                                dis = await b.is_disabled()
-                            except Exception:
-                                dis = False
-                            if not dis:
-                                await b.click()
-                                branch_found = True
-                                if progress_callback:
-                                    progress_callback("ℹ️ คลิกสาขาที่กำหนดไม่ได้ เลือกสาขาอื่นแทน")
-                                break
+                        await page.wait_for_timeout(int(float(delay_seconds) * 1000))
                     except Exception:
                         pass
-                    if branch_found:
-                        break
-                return
+                await target.first.click()
+                clicked_target_branch = True
+        except Exception:
+            clicked_target_branch = False
+        # 2) ถ้ายังไม่เจอ ลองใช้ :has-text เป็น fallback
+        if not clicked_target_branch:
+            branch_selector = f"{branch_buttons_base_selector}:has-text('{selected_branch}')"
+            try:
+                if await page.is_visible(branch_selector):
+                    if delay_seconds:
+                        try:
+                            await page.wait_for_timeout(int(float(delay_seconds) * 1000))
+                        except Exception:
+                            pass
+                    await page.click(branch_selector)
+                    clicked_target_branch = True
+            except Exception:
+                pass
+        if clicked_target_branch:
             if progress_callback:
                 progress_callback(f"✅ เลือก Branch '{selected_branch}' แล้ว!")
             branch_found = True
@@ -415,8 +456,11 @@ async def perform_real_booking(
         else:
             if progress_callback:
                 progress_callback("⚠️ Branch ยังไม่โหลด, กำลังลองใหม่...")
-            await page.click("body")
-            await asyncio.sleep(2)
+            try:
+                await page.click("body")
+            except Exception:
+                pass
+            await asyncio.sleep(0.4)
 
     # Fallback: choose first clickable branch if enabled
     if (not branch_found) and enable_fallback:
@@ -465,12 +509,17 @@ async def perform_real_booking(
             await page.wait_for_timeout(int(float(delay_seconds) * 1000))
         except Exception:
             pass
+    try:
+        await page.wait_for_selector(date_selector, state="visible", timeout=8000)
+    except Exception:
+        pass
     if not await safe_click(page, date_selector, bot_elements, progress_callback):
         if enable_fallback:
             try:
-                container = web_elements.get("date_picker_container") or "#calendar-grid"
+                # ใช้ fallback ตาม c_source: สัปดาห์ในปฏิทิน + ปุ่มที่ไม่ disabled
+                container = web_elements.get("date_picker_container") or "div[class*='MuiDayCalendar-week']"
                 await page.wait_for_selector(container, timeout=4000)
-                loc = page.locator(f"{container} button:not([disabled])")
+                loc = page.locator(f"{container} > button:not([class*='disabled']), {container} button:not([disabled])")
                 if await loc.count() > 0:
                     await loc.first.click()
                     if progress_callback:
@@ -524,6 +573,10 @@ async def perform_real_booking(
                 await page.wait_for_timeout(int(float(delay_seconds) * 1000))
             except Exception:
                 pass
+        try:
+            await page.wait_for_selector(time_selector, state="visible", timeout=8000)
+        except Exception:
+            pass
         if not await safe_click(page, time_selector, bot_elements, progress_callback):
             if enable_fallback:
                 try:

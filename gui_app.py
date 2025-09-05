@@ -95,6 +95,7 @@ def _friendly_expiration(s: str) -> str:
 
 # ----------------------------- ค่าตายตัวของ GUI -----------------------------
 profiles = ["Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5"]
+edge_profiles = ["Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5"]
 browsers = ["Chrome", "Edge"]
 LIVE_SITES = ["ROCKETBOOKING"]
 TRIAL_SITES = ["EZBOT", "PMROCKET"]
@@ -272,7 +273,7 @@ class BookingProcessWindow(tk.Tk):
                  all_api_data, selected_branch, selected_day, selected_time,
                  register_by_user, confirm_by_user, cdp_port=None, round_index=None,
                  timer_seconds=None, delay_seconds=None, auto_line_login=False,
-                 user_profile_name=None):
+                 user_profile_name=None, enable_fallback: bool=False):
         super().__init__()
         apply_app_style(self)
         self.parent_window_class = parent_window_class
@@ -297,6 +298,7 @@ class BookingProcessWindow(tk.Tk):
         self.delay_seconds = delay_seconds
         self.auto_line_login = auto_line_login
         self.user_profile_name = user_profile_name
+        self.enable_fallback = bool(enable_fallback)
 
         self.thread = None
         self._async_loop = None
@@ -367,20 +369,30 @@ class BookingProcessWindow(tk.Tk):
 
             self.update_status("⏳ กำลังรอเชื่อมต่อกับเบราว์เซอร์ที่เปิดอยู่...")
 
-            # license
-            try:
-                if self.cdp_port:
-                    license_session = start_license_session(self.user_info, port=self.cdp_port, version="1.0")
-                    if not license_session:
-                        self.update_status("❌ โควต้าการใช้งานพร้อมกันเต็ม หรือจองสิทธิ์ไม่ได้")
-                        return
-                    self.update_status("🟢 จองสิทธิ์ใช้งานสำเร็จ")
-            except Exception:
-                pass
+            # license moved below attach_to_chrome with retry; do not block early
 
-            self.update_status(f"🔌 กำลังเชื่อมต่อพอร์ต {self.cdp_port} ...")
+            self.update_status(f"🔌 กำลั��เชื่อมต่อพอร์ต {self.cdp_port} ...")
             playwright, browser, context, page = await attach_to_chrome(self.cdp_port, self.update_status)
             self.update_status("✅ เชื่อมต่อกับเบราว์เซอร์สำเร็จ!")
+
+            # License acquisition (non-blocking with short retries)
+            try:
+                if self.cdp_port and (license_session is None):
+                    for i in range(3):
+                        try:
+                            license_session = start_license_session(self.user_info, port=self.cdp_port, version="1.0")
+                        except Exception:
+                            license_session = None
+                        if license_session:
+                            break
+                        self.update_status(f"⚠️ จองสิทธิ์ไม่สำเร็จ กำลังลองใหม่ ({i+1}/3)...")
+                        await asyncio.sleep(1.2)
+                    if license_session:
+                        self.update_status("🟢 จองสิทธิ์ใช้งานสำเร็จ")
+                    else:
+                        self.update_status("⚠️ ไม่สามารถจองสิทธิ์ได้ จะดำเนินการต่อ (โ��รดตรวจสอบว่าไม่มีอินสแตนซ์อื่นใช้งานอยู่)")
+            except Exception:
+                pass
 
             await perform_real_booking(
                 page=page,
@@ -445,6 +457,513 @@ class BookingProcessWindow(tk.Tk):
             self._async_loop.call_soon_threadsafe(self._async_loop.stop)
             self.thread.join(timeout=2)
         messagebox.showinfo("ยกเลิก", "การจองถูกยกเลิกแล้ว")
+        self.destroy()
+        App(self.user_info).mainloop()
+
+
+# ----------------------------- Profile Login Window -----------------------------
+class ProfileLoginWindow(tk.Tk):
+    def __init__(self, user_info, browser_type, profile_name, line_email):
+        super().__init__()
+        apply_app_style(self)
+        self.user_info = user_info
+        self.browser_type = browser_type
+        self.profile_name = profile_name
+        self.line_email = line_email
+        self.browser_to_close = None
+        self.playwright_to_close = None
+        
+        self.title("Profile Login")
+        self.geometry("640x520")
+        self.resizable(True, True)
+        
+        main_frame = ttk.Frame(self, padding=(10, 10))
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.status_text = tk.Text(main_frame, wrap="word", font=("Arial", 10), height=15)
+        self.status_text.pack(fill="both", expand=True)
+        self.status_text.config(state=tk.DISABLED)
+        
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=10)
+        
+        self.ok_btn = ttk.Button(button_frame, text="ตกลง", command=self.on_ok, state=tk.DISABLED)
+        self.ok_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.cancel_btn = ttk.Button(button_frame, text="ยกเลิก", command=self.on_cancel)
+        self.cancel_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        self.start_profile_login()
+    
+    def update_status(self, message):
+        def inner():
+            self.status_text.config(state=tk.NORMAL)
+            self.status_text.insert(tk.END, message + "\n")
+            self.status_text.see(tk.END)
+            self.status_text.config(state=tk.DISABLED)
+        self.after(0, inner)
+    
+    def start_profile_login(self):
+        threading.Thread(target=self._run_profile_login, daemon=True).start()
+    
+    def _run_profile_login(self):
+        try:
+            self.update_status(f"⏳ เริ่มต้น Profile Login...")
+            self.update_status(f"🔧 Browser: {self.browser_type}")
+            self.update_status(f"📁 Profile: {self.profile_name}")
+            self.update_status(f"📧 LINE Email: {self.line_email}")
+            
+            self.update_status(f"🚀 กำลังเปิด {self.browser_type} ด้วย Profile {self.profile_name}...")
+            
+            launched_port = None
+            if self.browser_type == "Chrome":
+                launched_port, _ = launch_chrome_with_profile(self.profile_name)
+            else:
+                launched_port, _ = launch_edge_with_profile(self.profile_name)
+            
+            if not launched_port:
+                self.update_status("❌ ไม่สามารถเปิดเบราว์เซอร์ได้")
+                return
+            
+            self.update_status(f"✅ เปิดเบราว์เซอร์สำเร็จ! Port: {launched_port}")
+            
+            # Auto login to LINE
+            self.update_status("🔐 กำลังเชื่อมต่อกับเบราว์เซอร์เพื่อ Login LINE...")
+            
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                from real_booking import attach_to_chrome
+                playwright, browser, context, page = loop.run_until_complete(
+                    attach_to_chrome(launched_port, self.update_status)
+                )
+                
+                self.update_status("🌐 เข้าสู่หน้า Booking...")
+                loop.run_until_complete(page.goto("https://popmartth.rocket-booking.app/booking"))
+                
+                self.update_status("⏳ รอหน้าเว็บโหลดเสร็จ...")
+                
+                # Wait for page to fully load
+                try:
+                    # Wait for navigation and dynamic content
+                    loop.run_until_complete(page.wait_for_load_state("networkidle", timeout=15000))
+                    loop.run_until_complete(asyncio.sleep(3))
+                    self.update_status("✅ หน้าเว็บโหลดเสร็จแล้ว")
+                except Exception as e:
+                    self.update_status(f"⚠️ รอหน้าโหลด: {e}")
+                    loop.run_until_complete(asyncio.sleep(5))  # Fallback wait
+                
+                # Check if we're on booking page and click profile
+                self.update_status("🔍 ตรวจสอบหน้า Booking...")
+                
+                try:
+                    current_url = page.url.lower()
+                    if "booking" in current_url:
+                        self.update_status("✅ อยู่หน้า Booking แล้ว")
+                        
+                        # Click profile button
+                        self.update_status("👤 กดปุ่มโปรไฟล์...")
+                        
+                        profile_selectors = [
+                            "a[href='/profile']",
+                            "a:has-text('โปรไฟล์')",
+                            "button:has-text('โปรไฟล์')",
+                            "a:has-text('Profile')",
+                            "button:has-text('Profile')",
+                            ".profile-link",
+                            "[data-testid='profile']"
+                        ]
+                        
+                        profile_clicked = False
+                        for selector in profile_selectors:
+                            try:
+                                if loop.run_until_complete(page.is_visible(selector, timeout=3000)):
+                                    loop.run_until_complete(page.click(selector, timeout=3000))
+                                    self.update_status(f"✅ กดโปรไฟล์สำเร็จ: {selector}")
+                                    profile_clicked = True
+                                    break
+                            except Exception:
+                                continue
+                        
+                        if not profile_clicked:
+                            self.update_status("⚠️ ไม่พบปุ่มโปรไฟล์ - กรุณาคลิกด้วยตัวเอง แล้วกด OK")
+                            # Wait for manual click and continue
+                            loop.run_until_complete(asyncio.sleep(10))
+                            self.update_status("⏳ รอให้คลิกโปรไฟล์ด้วยตัวเอง...")
+                        
+                        # Wait for profile page to load
+                        loop.run_until_complete(asyncio.sleep(3))
+                        self.update_status("✅ อยู่หน้า Profile แล้ว")
+                        
+                        # Check login status with multiple selectors
+                        logout_selectors = [
+                            "p.textred:has-text('ออกจากระบบ')",
+                            ":has-text('ออกจากระบบ')",
+                            "button:has-text('ออกจากระบบ')",
+                            "a:has-text('ออกจากระบบ')"
+                        ]
+                        
+                        connect_selectors = [
+                            "button:has-text('Connect LINE Account')",
+                            ":has-text('Connect LINE Account')",
+                            "button:has-text('Connect')",
+                            ":has-text('Connect')",
+                            "a:has-text('Connect')",
+                            ".connect-button",
+                            "[data-testid*='connect']"
+                        ]
+                        
+                        logout_found = False
+                        for selector in logout_selectors:
+                            try:
+                                if loop.run_until_complete(page.is_visible(selector, timeout=2000)):
+                                    logout_found = True
+                                    self.update_status(f"✅ เจอปุ่ม 'ออกจากระบบ' - Login แล้ว! ({selector})")
+                                    break
+                            except Exception:
+                                continue
+                        
+                        if logout_found:
+                            success = True
+                        else:
+                            success = False  # Initialize success variable
+                            connect_found = False
+                            for selector in connect_selectors:
+                                try:
+                                    if loop.run_until_complete(page.is_visible(selector, timeout=2000)):
+                                        connect_found = True
+                                        self.update_status(f"🔗 เจอปุ่ม Connect - ต้อง Login LINE ({selector})")
+                                        break
+                                except Exception:
+                                    continue
+                            
+                            if connect_found:
+                                # Click Connect button first
+                                self.update_status("🔗 กำลังคลิกปุ่ม Connect...")
+                                connect_clicked = False
+                                for selector in connect_selectors:
+                                    try:
+                                        self.update_status(f"🔍 ลองหา: {selector}")
+                                        if loop.run_until_complete(page.is_visible(selector, timeout=3000)):
+                                            self.update_status(f"✅ เจอแล้ว กำลังคลิก: {selector}")
+                                            loop.run_until_complete(page.click(selector, timeout=5000))
+                                            self.update_status(f"✅ กดปุ่ม Connect สำเร็จ: {selector}")
+                                            connect_clicked = True
+                                            break
+                                        else:
+                                            self.update_status(f"❌ ไม่เจอ: {selector}")
+                                    except Exception as e:
+                                        self.update_status(f"⚠️ ผิดพลาดกับ {selector}: {e}")
+                                        continue
+                                
+                                if connect_clicked:
+                                    # Wait for second Connect button to appear
+                                    loop.run_until_complete(asyncio.sleep(2))
+                                    
+                                    # Look for and click "Connect LINE Account*" button
+                                    second_connect_selectors = [
+                                        "button:has-text('Connect LINE Account')",
+                                        ":has-text('Connect LINE Account')",
+                                        "button:contains('Connect LINE Account')",
+                                        "button[class*='connect']"
+                                    ]
+                                    
+                                    second_clicked = False
+                                    for selector in second_connect_selectors:
+                                        try:
+                                            if loop.run_until_complete(page.is_visible(selector, timeout=3000)):
+                                                loop.run_until_complete(page.click(selector, timeout=5000))
+                                                self.update_status(f"✅ กดปุ่ม Connect LINE Account สำเร็จ: {selector}")
+                                                second_clicked = True
+                                                break
+                                        except Exception:
+                                            continue
+                                    
+                                    # Wait for LINE login page to load
+                                    loop.run_until_complete(asyncio.sleep(3))
+                                    
+                                    # Check if we're on LINE OAuth page
+                                    current_url = loop.run_until_complete(page.evaluate("window.location.href"))
+                                    if "access.line.me" in current_url:
+                                        # Check for Quick Login first
+                                        quick_login_btn = "#app > div > div > div > div > div > div.LyContents01 > div > div.login-button > button"
+                                        different_account_link = "#app > div > div > div > div > div > div.LyContents01 > div > div.login-with-different-account > a"
+                                        
+                                        try:
+                                            if loop.run_until_complete(page.is_visible(quick_login_btn, timeout=3000)):
+                                                self.update_status("🔑 เจอ Quick Login - กำลังกดปุ่ม Log in")
+                                                try:
+                                                    loop.run_until_complete(page.click(quick_login_btn))
+                                                    self.update_status("✅ Quick Login สำเร็จ - กดปุ่มได้")
+                                                    success = True
+                                                except Exception:
+                                                    self.update_status("⚠️ Quick Login ไม่สำเร็จ - ปุ่ม disabled")
+                                                    success = False
+                                            elif loop.run_until_complete(page.is_visible(different_account_link, timeout=2000)):
+                                                self.update_status("🔑 เจอ 'Log in to another account' - กำลังคลิก")
+                                                loop.run_until_complete(page.click(different_account_link))
+                                                loop.run_until_complete(asyncio.sleep(2))
+                                                # Continue to normal login below
+                                                self.update_status("🔑 อยู่หน้า LINE OAuth - ใช้โหมด Normal Login")
+                                            else:
+                                                self.update_status("🔑 อยู่หน้า LINE OAuth - ใช้โหมด Normal Login")
+                                        except Exception:
+                                            self.update_status("🔑 อยู่หน้า LINE OAuth - ใช้โหมด Normal Login")
+                                        # Fill email and password directly (only if Quick Login failed)
+                                        if not success:
+                                            try:
+                                                # Get password from credentials first
+                                                from utils import load_line_credentials
+                                                creds = load_line_credentials()
+                                                password = None
+                                                if isinstance(creds, dict):
+                                                    password = creds.get(self.line_email)
+                                                elif isinstance(creds, list):
+                                                    for item in creds:
+                                                        if item.get('Email') == self.line_email:
+                                                            password = item.get('Password')
+                                                            break
+                                                
+                                                if not password:
+                                                    self.update_status("⚠️ ไม่พบ Password สำหรับ Email นี้")
+                                                    success = False
+                                                else:
+                                                    # Use selectors from line_login.py
+                                                    email_selectors = [
+                                                        "#app > div > div > div > div.MdBox01 > div > form > fieldset > div:nth-child(2) > input[type=text]",
+                                                        "input[type='email']",
+                                                        "input[name='tid']",
+                                                        "input[name='username']",
+                                                        "input[placeholder*='Email' i]",
+                                                        "input[placeholder*='อีเมล']"
+                                                    ]
+                                                    
+                                                    password_selectors = [
+                                                        "#app > div > div > div > div.MdBox01 > div > form > fieldset > div:nth-child(3) > input[type=password]",
+                                                        "input[type='password']",
+                                                        "input[name='tpasswd']",
+                                                        "input[name='password']",
+                                                        "input[placeholder*='Password' i]",
+                                                        "input[placeholder*='รหัส']"
+                                                    ]
+                                                    
+                                                    login_selectors = [
+                                                        "#app > div > div > div > div.MdBox01 > div > form > fieldset > div.mdFormGroup01Btn > button",
+                                                        "#app > div > div > div > div > div > div.LyContents01 > div > div.login-button > button",
+                                                        "button[type='submit']",
+                                                        "button:has-text('Log in')",
+                                                        "button:has-text('Login')",
+                                                        "button:has-text('เข้าสู่ระบบ')"
+                                                    ]
+                                                    
+                                                    # Fill email
+                                                    email_filled = False
+                                                    for selector in email_selectors:
+                                                        try:
+                                                            if loop.run_until_complete(page.is_visible(selector, timeout=2000)):
+                                                                loop.run_until_complete(page.fill(selector, self.line_email))
+                                                                self.update_status(f"✅ ใส่ Email: {self.line_email}")
+                                                                email_filled = True
+                                                                break
+                                                        except Exception:
+                                                            continue
+                                                    
+                                                    # Fill password
+                                                    password_filled = False
+                                                    if email_filled:
+                                                        for selector in password_selectors:
+                                                            try:
+                                                                if loop.run_until_complete(page.is_visible(selector, timeout=2000)):
+                                                                    loop.run_until_complete(page.fill(selector, password))
+                                                                    self.update_status("✅ ใส่ Password")
+                                                                    password_filled = True
+                                                                    break
+                                                            except Exception:
+                                                                continue
+                                                    
+                                                    # Click login button
+                                                    if email_filled and password_filled:
+                                                        for selector in login_selectors:
+                                                            try:
+                                                                if loop.run_until_complete(page.is_visible(selector, timeout=2000)):
+                                                                    loop.run_until_complete(page.click(selector))
+                                                                    self.update_status("✅ กดปุ่ม Login")
+                                                                    break
+                                                            except Exception:
+                                                                continue
+                                                        
+                                                        # Wait for OTP or redirect completion
+                                                        otp_selector = "#app > div > div > div > div > div > div.MdMN06DigitCode > div.mdMN06CodeBox"
+                                                        booking_marker = "body > div > div.sc-715cd296-0.fYuIyy > div > div:nth-child(1) > a > p"
+                                                        otp_shown = False
+                                                        
+                                                        for wait_attempt in range(40):  # Wait up to 40 seconds
+                                                            try:
+                                                                # Check if back to booking page
+                                                                if loop.run_until_complete(page.is_visible(booking_marker, timeout=1000)):
+                                                                    success = True
+                                                                    break
+                                                                
+                                                                # Check if OTP page is visible
+                                                                if loop.run_until_complete(page.is_visible(otp_selector, timeout=1000)):
+                                                                    if not otp_shown:
+                                                                        self.update_status("⌛ รอยืนยันตัวตนในมือถือ (LINE) ...")
+                                                                        otp_shown = True
+                                                            except Exception:
+                                                                pass
+                                                            loop.run_until_complete(asyncio.sleep(1))
+                                                        else:
+                                                            success = False
+                                                    else:
+                                                        success = False
+                                            except Exception as e:
+                                                self.update_status(f"⚠️ ผิดพลาดในการใส่ข้อมูล: {e}")
+                                                success = False
+                                    else:
+                                        # Use normal line_login for other cases
+                                        from line_login import perform_line_login, set_ui_helpers
+                                        
+                                        ui_helpers = {
+                                            "booking_marker": "body > div > div.sc-715cd296-0.fYuIyy > div > div:nth-child(1) > a > p"
+                                        }
+                                        set_ui_helpers(ui_helpers)
+                                    
+                                        success = loop.run_until_complete(
+                                            perform_line_login(
+                                                page=page,
+                                                progress_callback=self.update_status,
+                                                preferred_email=self.line_email
+                                            )
+                                        )
+                                    
+                                    # Verify login success by checking for logout button
+                                    if success:
+                                        loop.run_until_complete(asyncio.sleep(3))
+                                        # Navigate back to profile to verify
+                                        loop.run_until_complete(page.goto("https://popmartth.rocket-booking.app/profile"))
+                                        loop.run_until_complete(asyncio.sleep(2))
+                                        
+                                        # Check if logout button exists now
+                                        final_check = False
+                                        for selector in logout_selectors:
+                                            try:
+                                                if loop.run_until_complete(page.is_visible(selector, timeout=3000)):
+                                                    final_check = True
+                                                    self.update_status(f"✅ ยืนยัน Login สำเร็จ - เจอปุ่มออกจากระบบ")
+                                                    break
+                                            except Exception:
+                                                continue
+                                        
+                                        if not final_check:
+                                            self.update_status("⚠️ Login อาจไม่สำเร็จ - ไม่เจอปุ่มออกจากระบบ")
+                                            success = False
+                                else:
+                                    self.update_status("⚠️ ไม่สามารถคลิกปุ่ม Connect ได้")
+                                    success = False
+                            else:
+                                self.update_status("⚠️ ไม่เจอปุ่ม Connect หรือ ออกจากระบบ - ลองดูหน้าเว็บด้วยตัวเอง")
+                                success = False
+                    else:
+                        self.update_status(f"⚠️ ไม่ได้อยู่หน้า Booking: {current_url}")
+                        success = False
+                except Exception as e:
+                    self.update_status(f"⚠️ เกิดข้อผิดพลาดในการตรวจสอบหน้า: {e}")
+                    success = False
+                
+                if success:
+                    self.update_status("✅ Login LINE สำเร็จ!")
+                    self.update_status("✅ ตรวจสอบโปรไฟล์เสร็จสิ้น!")
+                    self.update_status("🎉 เสร็จสิ้นทุกขั้ตอน!")
+                    
+                    # Close browser immediately and show success
+                    try:
+                        loop.run_until_complete(browser.close())
+                        loop.run_until_complete(playwright.stop())
+                        # Kill Chrome/Edge processes
+                        import subprocess
+                        try:
+                            if self.browser_type == "Chrome":
+                                subprocess.run(["taskkill", "/f", "/im", "chrome.exe"], capture_output=True)
+                            else:
+                                subprocess.run(["taskkill", "/f", "/im", "msedge.exe"], capture_output=True)
+                        except Exception:
+                            pass
+                        self.update_status("🚫 ปิด Browser แล้ว")
+                    except Exception as e:
+                        self.update_status(f"⚠️ ปิด Browser ไม่ได้: {e}")
+                    
+                    self.after(0, self.show_success_popup)
+                    return
+                else:
+                    self.update_status("⚠️ Login LINE ไม่สำเร็จ - กรุณา Login ด้วยตัวเอง")
+                
+                # Close browser for failed case
+                try:
+                    loop.run_until_complete(browser.close())
+                    loop.run_until_complete(playwright.stop())
+                    # Kill Chrome/Edge processes
+                    import subprocess
+                    try:
+                        if self.browser_type == "Chrome":
+                            subprocess.run(["taskkill", "/f", "/im", "chrome.exe"], capture_output=True)
+                        else:
+                            subprocess.run(["taskkill", "/f", "/im", "msedge.exe"], capture_output=True)
+                    except Exception:
+                        pass
+                    self.update_status("🚫 ปิด Browser แล้ว")
+                except Exception as e:
+                    self.update_status(f"⚠️ ปิด Browser ไม่ได้: {e}")
+                
+            except Exception as e:
+                self.update_status(f"⚠️ Auto login ล้มเหลว: {e}")
+                self.update_status("📝 กรุณา Login LINE ด้วยตัวเองในเบราว์เซอร์")
+            finally:
+                loop.close()
+            
+        except Exception as e:
+            self.update_status(f"❌ เกิดข้อผิดพลาด: {e}")
+        finally:
+            if not hasattr(self, 'browser_to_close') or not self.browser_to_close:
+                self.after(0, lambda: self.ok_btn.config(state=tk.NORMAL))
+    
+
+    
+    def show_success_popup(self):
+        """Show success popup after browser is closed"""
+        messagebox.showinfo(
+            "LOGIN สำเร็จ", 
+            "LOGIN LINE เรียบร้อยแล้ว\nกรุณากดปุ่มเริ่มการจองได้เลย"
+        )
+        
+        # Return to main app
+        self.on_ok()
+    
+    def close_browser_and_exit(self):
+        """Close browser and return to main app"""
+        def _close():
+            try:
+                if self.browser_to_close:
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.browser_to_close.close())
+                    loop.close()
+                    self.update_status("🚫 ปิด Browser แล้ว")
+            except Exception as e:
+                self.update_status(f"⚠️ ปิด Browser ไม่ได้: {e}")
+            finally:
+                self.after(1000, self.on_ok)  # Return to main app after 1 second
+        
+        threading.Thread(target=_close, daemon=True).start()
+    
+    def on_ok(self):
+        self.destroy()
+        App(self.user_info).mainloop()
+    
+    def on_cancel(self):
         self.destroy()
         App(self.user_info).mainloop()
 
@@ -529,14 +1048,15 @@ class SingleBookingWindow(tk.Tk):
         ctrl = ttk.Frame(main_frame)
         ctrl.pack(pady=12)
         ttk.Button(ctrl, text="เริ่มการจอง", command=self.on_start_booking).pack(side=tk.LEFT, padx=5)
+        ttk.Button(ctrl, text="Profile Login", command=self.on_profile_login).pack(side=tk.LEFT, padx=5)
         ttk.Button(ctrl, text="ย้อนกลับ", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
 
         self.on_site_selected()
 
     def on_browser_selected(self, _=None):
         if self.browser_var.get() == "Edge":
-            self.profile_combo['values'] = ["Default"]
-            self.profile_var.set("Default")
+            self.profile_combo['values'] = edge_profiles
+            self.profile_var.set(edge_profiles[0])
         else:
             self.profile_combo['values'] = profiles
             self.profile_var.set(profiles[0])
@@ -552,6 +1072,26 @@ class SingleBookingWindow(tk.Tk):
         self.day_var.set(days[0])
 
     def on_start_booking(self):
+        # Check booking time and wait if needed
+        booking_time = self._get_booking_time()
+        if booking_time:
+            from datetime import datetime
+            import time
+            current_time = datetime.now().time()
+            time_diff = self._time_difference(current_time, booking_time)
+            
+            if time_diff > 60:  # More than 1 minute before booking
+                wait_time = time_diff - 45  # Enter site 45 seconds before
+                result = messagebox.askyesno(
+                    "รอเวลาจอง", 
+                    f"เวลาจอง: {booking_time.strftime('%H:%M')}\n"
+                    f"จะเข้าไซต์อีก {wait_time:.0f} วินาที\n\n"
+                    f"ต้องการรอหรือเริ่มเลย?"
+                )
+                if result:  # Yes = รอ
+                    messagebox.showinfo("กำลังรอ", f"รอ {wait_time:.0f} วินาที ก่อนเข้าไซต์...")
+                    time.sleep(wait_time)
+        
         selected_browser = self.browser_var.get()
         selected_profile = self.profile_var.get()
         selected_branch = self.branch_var.get()
@@ -652,6 +1192,141 @@ class SingleBookingWindow(tk.Tk):
             SettingsDialog(self).wait_window()
         except Exception as e:
             messagebox.showerror("Error", f"เปิดหน้าตั้งค่าไม่ได้: {e}")
+    
+    def on_profile_login(self):
+        """Launch Profile-based Login mode - เปิด Browser และ Login LINE ล่วงหน้า"""
+        try:
+            # Get selections
+            browser_type = self.browser_var.get()
+            profile_name = self.profile_var.get()
+            
+            # Get LINE credentials
+            creds = load_line_credentials()
+            if not creds:
+                messagebox.showwarning("คำเตือน", "No LINE credentials found. Please configure LINE settings first.")
+                return
+            
+            # Show LINE email selection dialog
+            line_email = self._select_line_email(list(creds.keys()))
+            if not line_email:
+                return
+            
+            # Launch with log window
+            self.destroy()
+            ProfileLoginWindow(
+                user_info=self.user_info,
+                browser_type=browser_type,
+                profile_name=profile_name,
+                line_email=line_email
+            ).mainloop()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Profile login failed: {e}")
+    
+    def _select_line_email(self, emails):
+        """Dropdown dialog to select LINE email"""
+        if len(emails) == 1:
+            return emails[0]
+        
+        dialog = tk.Toplevel(self)
+        dialog.title("Select LINE Email")
+        dialog.geometry("350x150")
+        dialog.resizable(False, False)
+        
+        main_frame = ttk.Frame(dialog, padding=(20, 20))
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text="Select LINE Email:").pack(pady=(0, 10))
+        
+        selected = tk.StringVar(value=emails[0])
+        email_combo = ttk.Combobox(main_frame, textvariable=selected, values=emails, state="readonly", width=30)
+        email_combo.pack(pady=(0, 15))
+        
+        result = {"email": None}
+        
+        def on_ok():
+            result["email"] = selected.get()
+            dialog.destroy()
+        
+        def on_cancel():
+            dialog.destroy()
+        
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack()
+        ttk.Button(btn_frame, text="OK", command=on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side=tk.LEFT, padx=5)
+        
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.wait_window()
+        
+        return result["email"]
+    
+    def _select_user_profile(self, profiles):
+        """Simple dialog to select user profile"""
+        if not profiles:
+            return None
+        if len(profiles) == 1:
+            return profiles[0]
+        
+        dialog = tk.Toplevel(self)
+        dialog.title("Select User Profile")
+        dialog.geometry("300x200")
+        dialog.resizable(False, False)
+        
+        selected = tk.StringVar(value=profiles[0])
+        
+        ttk.Label(dialog, text="Select User Profile:").pack(pady=10)
+        
+        for profile in profiles:
+            ttk.Radiobutton(dialog, text=profile, variable=selected, value=profile).pack(pady=2)
+        
+        result = {"profile": None}
+        
+        def on_ok():
+            result["profile"] = selected.get()
+            dialog.destroy()
+        
+        def on_cancel():
+            dialog.destroy()
+        
+        ttk.Button(dialog, text="OK", command=on_ok).pack(side=tk.LEFT, padx=10, pady=10)
+        ttk.Button(dialog, text="Cancel", command=on_cancel).pack(side=tk.RIGHT, padx=10, pady=10)
+        
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.wait_window()
+        
+        return result["profile"]
+    
+    def _get_booking_time(self):
+        """Get today's booking time from API"""
+        try:
+            import requests
+            from utils import BACKEND_URL
+            r = requests.get(f"{BACKEND_URL}/todaybooking/open", timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                time_str = data.get("booking_time")
+                if time_str:
+                    from datetime import datetime
+                    return datetime.strptime(time_str, "%H:%M").time()
+        except Exception:
+            pass
+        return None
+    
+    def _time_difference(self, current_time, target_time):
+        """Calculate seconds difference between current and target time"""
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        current_dt = datetime.combine(today, current_time)
+        target_dt = datetime.combine(today, target_time)
+        
+        # If target time is tomorrow
+        if target_dt < current_dt:
+            target_dt += timedelta(days=1)
+        
+        return (target_dt - current_dt).total_seconds()
 
     def on_cancel(self):
         self.destroy()
@@ -1663,6 +2338,224 @@ class LiveModeWindow(tk.Tk):
             App(self.user_info).mainloop()
 
 
+# ----------------------------- Admin Config Window -----------------------------
+class AdminConfigWindow(tk.Tk):
+    def __init__(self, user_info):
+        super().__init__()
+        apply_app_style(self)
+        self.user_info = user_info
+        self.title("Admin Config Inspector")
+        self.geometry("1200x800")
+        self.resizable(True, True)
+        self.protocol("WM_DELETE_WINDOW", self.on_back)
+        
+        # Admin check
+        role = (user_info.get("Role") or "").lower()
+        if role != "admin":
+            ttk.Label(self, text="Admin access required", foreground="red").pack(pady=20)
+            ttk.Button(self, text="Back", command=self.on_back).pack()
+            return
+        
+        self.schema_cache = None
+        self.loading = False
+        
+        # Main layout
+        main_frame = ttk.Frame(self)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Top controls
+        top_frame = ttk.Frame(main_frame)
+        top_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(top_frame, text="Category:").pack(side=tk.LEFT, padx=(0, 5))
+        self.category_var = tk.StringVar()
+        self.category_combo = ttk.Combobox(top_frame, textvariable=self.category_var, state="readonly", width=20)
+        self.category_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.category_combo.bind("<<ComboboxSelected>>", self.on_category_selected)
+        
+        ttk.Button(top_frame, text="Refresh", command=self.refresh_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_frame, text="Save", command=self.save_changes).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_frame, text="Reset to Base", command=self.reset_to_base).pack(side=tk.LEFT, padx=5)
+        
+        # Config panels
+        panels_frame = ttk.Frame(main_frame)
+        panels_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Base KV panel
+        base_frame = ttk.LabelFrame(panels_frame, text="Base KV (Read-only)")
+        base_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        self.base_text = tk.Text(base_frame, wrap=tk.WORD, font=("Consolas", 10), state=tk.DISABLED)
+        self.base_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Override panel
+        override_frame = ttk.LabelFrame(panels_frame, text="Override (Editable)")
+        override_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        self.override_text = tk.Text(override_frame, wrap=tk.WORD, font=("Consolas", 10))
+        self.override_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Effective panel
+        effective_frame = ttk.LabelFrame(panels_frame, text="Effective Config (Merged)")
+        effective_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        self.effective_text = tk.Text(effective_frame, wrap=tk.WORD, font=("Consolas", 10), state=tk.DISABLED)
+        self.effective_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Status bar
+        self.status_var = tk.StringVar(value="Ready")
+        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
+        status_bar.pack(fill=tk.X, pady=(10, 0))
+        
+        # Load initial data
+        self.load_categories()
+    
+    def load_categories(self):
+        """Load available categories"""
+        def _load():
+            try:
+                from admin_config_inspector import admin_get_config_categories
+                categories = admin_get_config_categories(self.user_info)
+                self.after(0, lambda: self._on_categories_loaded(categories))
+            except Exception as e:
+                self.after(0, lambda: self._on_error(f"Failed to load categories: {e}"))
+        
+        self.status_var.set("Loading categories...")
+        threading.Thread(target=_load, daemon=True).start()
+    
+    def _on_categories_loaded(self, categories):
+        self.category_combo['values'] = categories
+        if categories:
+            self.category_var.set(categories[0])
+            self.on_category_selected()
+        self.status_var.set("Categories loaded")
+    
+    def _on_error(self, message):
+        self.status_var.set(f"Error: {message}")
+        messagebox.showerror("Error", message)
+    
+    def on_category_selected(self, event=None):
+        """Handle category selection"""
+        category = self.category_var.get()
+        if not category or self.loading:
+            return
+        
+        def _load():
+            try:
+                from admin_config_inspector import admin_get_category_config
+                config_data = admin_get_category_config(self.user_info, category)
+                self.after(0, lambda: self._on_config_loaded(config_data))
+            except Exception as e:
+                self.after(0, lambda: self._on_error(f"Failed to load config: {e}"))
+        
+        self.loading = True
+        self.status_var.set(f"Loading {category}...")
+        threading.Thread(target=_load, daemon=True).start()
+    
+    def _on_config_loaded(self, config_data):
+        """Update UI with loaded config data"""
+        try:
+            # Update base panel
+            self.base_text.config(state=tk.NORMAL)
+            self.base_text.delete(1.0, tk.END)
+            self.base_text.insert(tk.END, json.dumps(config_data.get("base", {}), indent=2, ensure_ascii=False))
+            self.base_text.config(state=tk.DISABLED)
+            
+            # Update override panel
+            self.override_text.delete(1.0, tk.END)
+            self.override_text.insert(tk.END, json.dumps(config_data.get("override", {}), indent=2, ensure_ascii=False))
+            
+            # Update effective panel
+            self.effective_text.config(state=tk.NORMAL)
+            self.effective_text.delete(1.0, tk.END)
+            self.effective_text.insert(tk.END, json.dumps(config_data.get("effective", {}), indent=2, ensure_ascii=False))
+            self.effective_text.config(state=tk.DISABLED)
+            
+            self.status_var.set(f"Loaded {config_data.get('category', 'config')}")
+        except Exception as e:
+            self._on_error(f"Failed to display config: {e}")
+        finally:
+            self.loading = False
+    
+    def refresh_data(self):
+        """Refresh current category data"""
+        self.on_category_selected()
+    
+    def save_changes(self):
+        """Save override changes"""
+        category = self.category_var.get()
+        if not category:
+            messagebox.showwarning("Warning", "No category selected")
+            return
+        
+        try:
+            # Parse override text
+            override_text = self.override_text.get(1.0, tk.END).strip()
+            if not override_text:
+                updates = {}
+            else:
+                updates = json.loads(override_text)
+            
+            def _save():
+                try:
+                    from admin_config_inspector import admin_update_category_config
+                    success, errors = admin_update_category_config(self.user_info, category, updates)
+                    if success:
+                        self.after(0, lambda: self._on_save_success())
+                    else:
+                        self.after(0, lambda: self._on_save_error(errors))
+                except Exception as e:
+                    self.after(0, lambda: self._on_error(f"Save failed: {e}"))
+            
+            self.status_var.set("Saving...")
+            threading.Thread(target=_save, daemon=True).start()
+            
+        except json.JSONDecodeError as e:
+            messagebox.showerror("JSON Error", f"Invalid JSON in override panel: {e}")
+        except Exception as e:
+            self._on_error(f"Save preparation failed: {e}")
+    
+    def _on_save_success(self):
+        self.status_var.set("Saved successfully")
+        messagebox.showinfo("Success", "Config saved successfully")
+        self.refresh_data()  # Refresh to show updated effective config
+    
+    def _on_save_error(self, errors):
+        error_msg = "\n".join(errors)
+        self.status_var.set("Save failed")
+        messagebox.showerror("Validation Error", f"Save failed:\n{error_msg}")
+    
+    def reset_to_base(self):
+        """Reset category to base (clear override)"""
+        category = self.category_var.get()
+        if not category:
+            messagebox.showwarning("Warning", "No category selected")
+            return
+        
+        if not messagebox.askyesno("Confirm Reset", f"Reset {category} to base config?\nThis will clear all overrides."):
+            return
+        
+        def _reset():
+            try:
+                from admin_config_inspector import admin_reset_category_config
+                success = admin_reset_category_config(self.user_info, category)
+                if success:
+                    self.after(0, lambda: self._on_reset_success())
+                else:
+                    self.after(0, lambda: self._on_error("Reset failed"))
+            except Exception as e:
+                self.after(0, lambda: self._on_error(f"Reset failed: {e}"))
+        
+        self.status_var.set("Resetting...")
+        threading.Thread(target=_reset, daemon=True).start()
+    
+    def _on_reset_success(self):
+        self.status_var.set("Reset successful")
+        messagebox.showinfo("Success", "Config reset to base successfully")
+        self.refresh_data()
+    
+    def on_back(self):
+        self.destroy()
+        AdminConsoleWindow(self.user_info).mainloop()
+
+
 # ----------------------------- Admin Console -----------------------------
 class AdminConsoleWindow(tk.Tk):
     def __init__(self, user_info):
@@ -1685,6 +2578,7 @@ class AdminConsoleWindow(tk.Tk):
         nb = ttk.Notebook(self); nb.pack(fill="both", expand=True, padx=10, pady=10)
         self._users_tab = ttk.Frame(nb); nb.add(self._users_tab, text="Users")
         self._today_tab = ttk.Frame(nb); nb.add(self._today_tab, text="TodayBooking")
+        self._config_tab = ttk.Frame(nb); nb.add(self._config_tab, text="Config")
 
         # --- Users tab ---
         top = ttk.Frame(self._users_tab); top.pack(fill="x", pady=6)
@@ -1710,14 +2604,88 @@ class AdminConsoleWindow(tk.Tk):
         # --- Today tab ---
         ttop = ttk.Frame(self._today_tab); ttop.pack(fill="x", pady=12)
         ttk.Label(ttop, text="สถานะวันนี้: ").pack(side=tk.LEFT, padx=6)
-        self.today_status_lbl = ttk.Label(ttop, text="กำลังโหลด...")
+        self.today_status_lbl = ttk.Label(ttop, text="กำลังโหลด...", width=50)
         self.today_status_lbl.pack(side=tk.LEFT)
         ttk.Button(ttop, text="รีเฟรช", command=self.refresh_today).pack(side=tk.LEFT, padx=6)
         ttk.Button(ttop, text="เปิดวันนี้", command=lambda: self.set_today(True)).pack(side=tk.LEFT, padx=3)
         ttk.Button(ttop, text="ปิดวันนี้", command=lambda: self.set_today(False)).pack(side=tk.LEFT, padx=3)
+        ttk.Button(ttop, text="ตั้งเวลาจอง", command=self.set_booking_time).pack(side=tk.LEFT, padx=3)
+        
+        # --- Config tab ---
+        config_frame = ttk.Frame(self._config_tab)
+        config_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Config Inspector section
+        inspector_frame = ttk.LabelFrame(config_frame, text="Config Inspector", padding=(10, 10))
+        inspector_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(inspector_frame, text="Manage application configuration with KV override support").pack()
+        ttk.Button(inspector_frame, text="Open Config Inspector", command=self.open_config_inspector).pack(pady=5)
+        
+        # API Status section
+        status_frame = ttk.LabelFrame(config_frame, text="API Status Checker", padding=(10, 10))
+        status_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Dropdown for API selection
+        api_select_frame = ttk.Frame(status_frame)
+        api_select_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(api_select_frame, text="Select API:").pack(side=tk.LEFT, padx=(0, 5))
+        self.api_var = tk.StringVar()
+        self.api_combo = ttk.Combobox(api_select_frame, textvariable=self.api_var, state="readonly", width=20)
+        self.api_combo.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(api_select_frame, text="Check Status", command=self.check_api_status).pack(side=tk.LEFT)
+        
+        # Status display
+        self.api_status_text = tk.Text(status_frame, wrap=tk.WORD, font=("Arial", 10), height=8)
+        self.api_status_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Load API list
+        self.load_api_list()
 
         self.load_users()
         self.refresh_today()
+    
+    def open_config_inspector(self):
+        """Open dedicated config inspector window"""
+        self.destroy()
+        AdminConfigWindow(self.user_info).mainloop()
+    
+    def load_api_list(self):
+        """Load available APIs for status checking"""
+        apis = ["All APIs", "branchs", "times", "urls", "sites"]
+        self.api_combo['values'] = apis
+        self.api_var.set("All APIs")
+    
+    def check_api_status(self):
+        """Check status of selected API"""
+        selected = self.api_var.get()
+        if not selected:
+            return
+        
+        def _check():
+            try:
+                from utils import get_all_api_data
+                self.api_status_text.delete(1.0, tk.END)
+                self.api_status_text.insert(tk.END, f"Checking {selected}...\n")
+                
+                results = get_all_api_data()
+                
+                if selected == "All APIs":
+                    for name, data in results.items():
+                        ok = not (isinstance(data, str) and data.startswith("Error"))
+                        self.api_status_text.insert(tk.END, f"{name}: {'✅' if ok else '❌'}\n")
+                else:
+                    data = results.get(selected, "Not found")
+                    ok = not (isinstance(data, str) and data.startswith("Error"))
+                    self.api_status_text.insert(tk.END, f"{selected}: {'✅' if ok else '❌'}\n")
+                    if not ok:
+                        self.api_status_text.insert(tk.END, f"Error: {data}\n")
+                    else:
+                        self.api_status_text.insert(tk.END, f"Data: {json.dumps(data, indent=2, ensure_ascii=False)[:500]}...\n")
+            except Exception as e:
+                self.api_status_text.delete(1.0, tk.END)
+                self.api_status_text.insert(tk.END, f"Failed to check API status: {e}\n")
+        
+        threading.Thread(target=_check, daemon=True).start()
 
     def on_back(self):
         self.destroy()
@@ -1810,11 +2778,18 @@ class AdminConsoleWindow(tk.Tk):
         if not self.api:
             return
         try:
-            val = self.api.get_todaybooking_open()
-            if val is None:
+            result = self.api.get_todaybooking_open()
+            if result is None:
                 self.today_status_lbl.config(text="(ไม่มี endpoint) — ถือว่า 'ปิด'")
             else:
-                self.today_status_lbl.config(text=("เปิด (มี booking)" if val else "ปิด (ไม่มี booking)"))
+                is_open = result.get("open", False) if isinstance(result, dict) else bool(result)
+                booking_time = result.get("booking_time", "") if isinstance(result, dict) else ""
+                
+                status_text = "เปิด (มี booking)" if is_open else "ปิด (ไม่มี booking)"
+                if booking_time:
+                    status_text += f" | เวลาจอง: {booking_time}"
+                
+                self.today_status_lbl.config(text=status_text)
         except Exception as e:
             self.today_status_lbl.config(text=f"โหลดไม่ได้: {e}")
 
@@ -1830,6 +2805,32 @@ class AdminConsoleWindow(tk.Tk):
                 messagebox.showerror("ล้มเหลว", "อัปเดตไม่สำเร็จ")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+    
+    def set_booking_time(self):
+        from tkinter import simpledialog
+        time_str = simpledialog.askstring(
+            "ตั้งเวลาจอง", 
+            "ใส่เวลาจอง (HH:MM เช่น 10:00):"
+        )
+        if time_str:
+            try:
+                from datetime import datetime
+                datetime.strptime(time_str, "%H:%M")
+                
+                payload = {"booking_time": time_str}
+                r = requests.post(
+                    f"{BACKEND_URL}/todaybooking/time",
+                    headers=self.api._headers, json=payload, timeout=10
+                )
+                if r.status_code in (200, 204):
+                    messagebox.showinfo("สำเร็จ", f"ตั้งเวลาจอง {time_str} แล้ว")
+                    self.refresh_today()
+                else:
+                    messagebox.showerror("ล้มเหลว", "ตั้งเวลาไม่สำเร็จ")
+            except ValueError:
+                messagebox.showerror("ผิดพลาด", "รูปแบบเวลาไม่ถูกต้อง (ใช้ HH:MM)")
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
 
 
 # ----------------------------- App (Main) -----------------------------
@@ -1863,12 +2864,11 @@ class App(tk.Tk):
         self.today_canvas = tk.Canvas(inner, width=18, height=18, highlightthickness=0)
         self.today_canvas.pack(side=tk.LEFT, padx=(0, 8))
         self.today_status_var = tk.StringVar(value="กำลังตรวจสอบ...")
-        ttk.Label(inner, textvariable=self.today_status_var, font=("Arial", 11)).pack(side=tk.LEFT)
+        ttk.Label(inner, textvariable=self.today_status_var, font=("Arial", 11), width=60).pack(side=tk.LEFT)
         ttk.Button(inner, text="รีเฟรช", command=self.refresh_todaybooking_status).pack(side=tk.RIGHT)
         self.after(100, self.refresh_todaybooking_status)
 
         menu = ttk.Frame(self); menu.pack(pady=10)
-        ttk.Button(menu, text="ตรวจสอบสถานะ Config", width=25, command=self.open_api_status).pack(pady=5)
         ttk.Button(menu, text="เติมเงิน", width=25, command=self.on_top_up).pack(pady=5)
         self.trial_mode_btn = ttk.Button(menu, text="โหมดทดลอง", width=25, command=self.open_trial_mode_window, state='disabled')
         self.trial_mode_btn.pack(pady=5)
@@ -1895,25 +2895,38 @@ class App(tk.Tk):
 
     def refresh_todaybooking_status(self):
         try:
-            ok = is_today_booking_open(True)
+            # Get booking status and time
+            import requests
+            from utils import BACKEND_URL
+            try:
+                r = requests.get(f"{BACKEND_URL}/todaybooking/open", timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    ok = data.get("open", False)
+                    booking_time = data.get("booking_time", "")
+                else:
+                    ok = is_today_booking_open(True)
+                    booking_time = ""
+            except Exception:
+                ok = is_today_booking_open(True)
+                booking_time = ""
+            
             today_str = datetime.now().strftime("%Y-%m-%d")
             self.today_canvas.delete("all")
             color = "#2ecc71" if ok else "#e74c3c"
             self.today_canvas.create_oval(2, 2, 16, 16, fill=color, outline=color)
-            self.today_status_var.set(f"วันนี้ {today_str}: " + ("มีการ Booking" if ok else "ไม่มีการ Booking"))
+            
+            status_text = f"วันนี้ {today_str}: " + ("มีการ Booking" if ok else "ไม่มีการ Booking")
+            if booking_time:
+                status_text += f" | รอบ: {booking_time}"
+            
+            self.today_status_var.set(status_text)
         except Exception as e:
             self.today_canvas.delete("all")
             self.today_canvas.create_oval(2, 2, 16, 16, fill="#bdc3c7", outline="#bdc3c7")
             self.today_status_var.set(f"ตรวจสอบไม่ได้: {e}")
 
-    def open_api_status(self):
-        try:
-            self.destroy()
-            ApiStatusPopup(self.user_info).mainloop()
-        except Exception as e:
-            traceback.print_exc()
-            messagebox.showerror("Error", f"เปิดหน้าต่างไม่ได้: {e}")
-            App(self.user_info).mainloop()
+
 
     def on_top_up(self):
         try:
@@ -1957,37 +2970,7 @@ class App(tk.Tk):
             StartMenu().mainloop()
 
 
-# ----------------------------- Api Status Popup -----------------------------
-class ApiStatusPopup(tk.Tk):
-    def __init__(self, user_info):
-        super().__init__()
-        apply_app_style(self)
-        self.user_info = user_info
-        self.title("สถานะ Config")
-        self.geometry("420x300")
-        self.resizable(False, False)
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.text = tk.Text(self, wrap="word", font=("Arial", 12))
-        self.text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Button(self, text="ย้อนกลับ", command=self.on_close).pack(pady=5)
-
-        threading.Thread(target=self.load_api_status, daemon=True).start()
-
-    def load_api_status(self):
-        self.text.insert(tk.END, "กำลังโหลดข้อมูล ......\n")
-        try:
-            results = get_all_api_data()
-        except Exception as e:
-            self.text.insert(tk.END, f"❌ โหลดไม่สำเร็จ:\n{e}\n"); return
-        self.text.delete("1.0", tk.END)
-        for name, data in results.items():
-            ok = not (isinstance(data, str) and data.startswith("Error"))
-            self.text.insert(tk.END, f"{name} : {'✅' if ok else '❌'}\n")
-
-    def on_close(self):
-        self.destroy()
-        App(self.user_info).mainloop()
 
 
 # ----------------------------- Login/Register/Start -----------------------------

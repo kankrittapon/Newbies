@@ -90,6 +90,19 @@ class BookingTask:
     def run_booking(self, all_api_data, progress_callback):
         # นี่คือเมธอดที่จะรันใน thread ย่อย
         try:
+            # Calculate pre-booking time (30-60 seconds before booking time)
+            booking_time = self._get_booking_time()
+            if booking_time:
+                from datetime import datetime
+                import time
+                current_time = datetime.now().time()
+                time_diff = self._time_difference(current_time, booking_time)
+                
+                if time_diff > 60:  # More than 1 minute before booking
+                    wait_time = time_diff - 45  # Enter site 45 seconds before
+                    progress_callback(f"⏰ Task [{self.id[:4]}] - รอ {wait_time:.0f} วินาที ก่อนเข้าไซต์...")
+                    time.sleep(wait_time)
+            
             progress_callback(f"🚀 Task [{self.id[:4]}] - กำลังเริ่มการจอง...")
             
             browser_type = self.task_data.get('browser_type')
@@ -118,6 +131,34 @@ class BookingTask:
             if self.cdp_port:
                 pass
             pass
+    
+    def _get_booking_time(self):
+        """Get today's booking time from API"""
+        try:
+            import requests
+            from utils import BACKEND_URL
+            r = requests.get(f"{BACKEND_URL}/todaybooking/open", timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                time_str = data.get("booking_time")
+                if time_str:
+                    return datetime.strptime(time_str, "%H:%M").time()
+        except Exception:
+            pass
+        return None
+    
+    def _time_difference(self, current_time, target_time):
+        """Calculate seconds difference between current and target time"""
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        current_dt = datetime.combine(today, current_time)
+        target_dt = datetime.combine(today, target_time)
+        
+        # If target time is tomorrow
+        if target_dt < current_dt:
+            target_dt += timedelta(days=1)
+        
+        return (target_dt - current_dt).total_seconds()
 
 class ScheduledManager:
     def __init__(self, all_api_data, progress_callback):
