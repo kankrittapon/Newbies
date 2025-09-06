@@ -1,38 +1,33 @@
-# Build files
-dist/
-build/
-*.build/
-*.dist/
+# Build outputs
 *.exe
-*.spec
-build_nuitka.bat
+*.dist/
+*.build/
+NewbiesBot.exe
+NewbiesBot_*
+
+# Release packages
+release_*/
+NewbiesBot_Release/
+NewbiesBot_v*/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
 
 # Logs
 logs/
 *.log
-
-# Cache
-__pycache__/
-*.pyc
-*.pyo
-
-# Config files (sensitive)
-config/
-*.json
-!bundled_config.example.json
-
-# User data
-%USERPROFILE%/.newbies_bot/
-%APPDATA%/BokkChoYCompany/
-
-# Temp files
-*.tmp
-*.temp
 nuitka-crash-report.xml
 
-# Release files
-release/
-*.zip
+# Environment
+.env
+.venv
+env/
+venv/
 
 # IDE
 .vscode/
@@ -41,5 +36,30 @@ release/
 *.swo
 
 # OS
-Thumbs.db
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# User data & Browser profiles
+config/
+profiles/
+user_data/
+chrome_profiles/
+extension/
+
+# Personal data
+*.json
+!bundled_config.example.json
+!kv_overrides.json
+bundled_config.json
+user_config.json
+
+# Test files
+test_*.py
+*_test.py
