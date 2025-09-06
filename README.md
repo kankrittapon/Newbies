@@ -97,7 +97,6 @@
 │           Browser Control               │
 │  • Chrome Operations                    │
 │  • Edge Operations                      │
-│  • Playwright Integration               │
 ├─────────────────────────────────────────┤
 │            Booking Engine               │
 │  • Real Booking                         │
@@ -121,16 +120,6 @@
 1. ดาวน์โหลด `NewbiesBot.exe`
 2. Run as administrator
 3. ทำตาม Configuration Wizard
-
-### Option 2: Build from Source
-```bash
-git clone https://github.com/your-repo/newbies-bot.git
-cd newbies-bot
-pip install -r requirements.txt
-python build_config.py
-call build_nuitka.bat
-```
-
 ## 🎯 User Roles & Features
 
 | Role | Simple Mode | Trial Mode | Live Mode | Scheduler | Admin |
@@ -160,7 +149,6 @@ call build_nuitka.bat
 - ✅ เพิ่ม Simple Mode สำหรับผู้เริ่มต้น
 - ✅ ปรับปรุง Performance & Stability
 - ✅ เพิ่ม Configuration Wizard
-- ✅ รองรับ Nuitka Build
 - ✅ เพิ่ม Comprehensive Documentation
 
 ### v0.9.0 (2023-12-15)
@@ -172,25 +160,10 @@ call build_nuitka.bat
 
 เรายินดีรับ Contribution! กรุณาอ่าน [CONTRIBUTING.md](CONTRIBUTING.md) ก่อน
 
-### Development Setup
-```bash
-git clone https://github.com/your-repo/newbies-bot.git
-cd newbies-bot
-pip install -r requirements.txt
-python gui_app.py  # Development mode
-```
-
-### Code Style
-- ใช้ Python 3.8+
-- ตาม PEP 8 Guidelines
-- เพิ่ม Type Hints
-- เขียน Docstrings
-
 ## 📞 Support
 
 ### 🆘 Emergency (วันจอง)
 - **LINE:** @newbies_emergency
-- **Phone:** 02-xxx-xxxx (24/7)
 
 ### 💬 General Support
 - **LINE:** @newbies_support
@@ -198,23 +171,9 @@ python gui_app.py  # Development mode
 - **Telegram:** @newbies_help
 - **เวลาทำการ:** 9:00-18:00 น.
 
-### 🐛 Bug Reports
-- **GitHub Issues:** [Report Bug](https://github.com/your-repo/newbies-bot/issues)
-- **Email:** bugs@newbiesbot.com
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
-
-- **Playwright Team** - Browser automation
-- **Nuitka Project** - Python compilation
-- **Tkinter Community** - GUI framework
-- **All Beta Testers** - ขอบคุณสำหรับการทดสอบ
-
----
-
 **Made with ❤️ by BokkChoY Company**
-
-*สำหรับการใช้งานส่วนตัวเท่านั้น | For Personal Use Only*
