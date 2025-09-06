@@ -1,50 +1,45 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
-*.so
-*.pyd
-*.dll
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
+# Build files
 dist/
-downloads/
-.eggs/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
+build/
+*.build/
+*.dist/
+*.exe
+*.spec
+build_nuitka.bat
 
 # Logs
+logs/
 *.log
+
+# Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Config files (sensitive)
+config/
+*.json
+!bundled_config.example.json
+
+# User data
+%USERPROFILE%/.newbies_bot/
+%APPDATA%/BokkChoYCompany/
+
+# Temp files
+*.tmp
+*.temp
+nuitka-crash-report.xml
+
+# Release files
+release/
+*.zip
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
-.DS_Store
 Thumbs.db
-
-# Env / secrets
-.env
-.env.*
-config.json
-bundled_config.json
-
-# Local databases / caches
-events.db
-
-# Local browser profiles (generated)
-chrome_profiles/
-edge_profiles/
+.DS_Store

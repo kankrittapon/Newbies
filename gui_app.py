@@ -4,6 +4,16 @@ from tkinter import ttk, messagebox
 import threading, asyncio, json, traceback, re
 from datetime import datetime
 from typing import Any, Dict, Optional
+import time
+
+# Import ระบบใหม่
+from window_manager import window_manager
+from error_handler import safe_execute, handle_async_error, ErrorReporter
+from logger_config import setup_logging, get_logger, log_performance, cleanup_old_logs
+
+# Setup logging
+logger = setup_logging()
+cleanup_old_logs()
 
 # ---- internal modules (มีอยู่ในโปรเจ็กต์) ----
 from chrome_op import launch_chrome_instance as launch_chrome_with_profile
@@ -330,9 +340,39 @@ class BookingProcessWindow(tk.Tk):
             self.status_text.config(state=tk.DISABLED)
         self.after(0, inner)
 
+    @safe_execute()
+    def on_ok(self):
+        self.destroy()
+        # ตรวจว่ามาจาก Simple Mode หรือไม่
+        if hasattr(self, 'parent_window_class') and self.parent_window_class.__name__ == 'SimpleModeWindow':
+            from simple_mode import SimpleModeWindow
+            SimpleModeWindow(user_info=self.user_info, api_data=self.all_api_data).mainloop()
+        else:
+            from gui_app import App
+            App(self.user_info).mainloop()
+
+    @safe_execute()
+    def on_cancel(self):
+        if self._async_loop and self._async_loop.is_running():
+            self.update_status("🚨 กำลังยกเลิกการทำงาน...")
+            self._async_loop.call_soon_threadsafe(self._async_loop.stop)
+            self.thread.join(timeout=2)
+        messagebox.showinfo("ยกเลิก", "การจองถูกยกเลิกแล้ว")
+        self.destroy()
+        # ตรวจว่ามาจาก Simple Mode หรือไม่
+        if hasattr(self, 'parent_window_class') and self.parent_window_class.__name__ == 'SimpleModeWindow':
+            from simple_mode import SimpleModeWindow
+            SimpleModeWindow(user_info=self.user_info, api_data=self.all_api_data).mainloop()
+        else:
+            from gui_app import App
+            App(self.user_info).mainloop()
+
+    @safe_execute()
     def start_booking_process(self):
+        start_time = time.time()
         self.thread = threading.Thread(target=self._run_async_booking, daemon=True)
         self.thread.start()
+        log_performance("start_booking_process", time.time() - start_time)
 
     def _run_async_booking(self):
         self._async_loop = asyncio.new_event_loop()
@@ -345,8 +385,8 @@ class BookingProcessWindow(tk.Tk):
         except asyncio.TimeoutError:
             self.update_status("❌ การจองหมดเวลา! อาจมีปัญหาเกิดขึ้น")
         except Exception as e:
+            ErrorReporter.report_critical(e, "Booking process failed")
             self.update_status(f"❌ เกิดข้อผิดพลาดที่ไม่คาดคิด: {e}")
-            traceback.print_exc()
         finally:
             self.update_status("🟢 กระบวนการสิ้นสุดแล้ว")
             self.after(0, lambda: self.ok_btn.config(state=tk.NORMAL))
@@ -447,18 +487,7 @@ class BookingProcessWindow(tk.Tk):
             if self._async_loop and not self._async_loop.is_closed():
                 self._async_loop.create_task(asyncio.sleep(0)).cancel()
 
-    def on_ok(self):
-        self.destroy()
-        App(self.user_info).mainloop()
 
-    def on_cancel(self):
-        if self._async_loop and self._async_loop.is_running():
-            self.update_status("🚨 กำลังยกเลิกการทำงาน...")
-            self._async_loop.call_soon_threadsafe(self._async_loop.stop)
-            self.thread.join(timeout=2)
-        messagebox.showinfo("ยกเลิก", "การจองถูกยกเลิกแล้ว")
-        self.destroy()
-        App(self.user_info).mainloop()
 
 
 # ----------------------------- Profile Login Window -----------------------------
@@ -2870,9 +2899,14 @@ class App(tk.Tk):
 
         menu = ttk.Frame(self); menu.pack(pady=10)
         ttk.Button(menu, text="เติมเงิน", width=25, command=self.on_top_up).pack(pady=5)
+        
+        # Simple Mode button (prominent)
+        self.simple_mode_btn = ttk.Button(menu, text="🎯 โหมดง่าย (แนะนำ)", width=25, command=self.open_simple_mode, state='disabled')
+        self.simple_mode_btn.pack(pady=5)
+        
         self.trial_mode_btn = ttk.Button(menu, text="โหมดทดลอง", width=25, command=self.open_trial_mode_window, state='disabled')
         self.trial_mode_btn.pack(pady=5)
-        self.live_mode_btn = ttk.Button(menu, text="โหมดใช้งานจริง", width=25, command=self.open_live_mode_window, state='disabled')
+        self.live_mode_btn = ttk.Button(menu, text="โหมดขั้นสูง", width=25, command=self.open_live_mode_window, state='disabled')
         self.live_mode_btn.pack(pady=5)
 
         # ปุ่ม Admin Console เฉพาะ admin
@@ -2880,6 +2914,7 @@ class App(tk.Tk):
         if role == "admin":
             ttk.Button(menu, text="Admin Console", width=25, command=self.open_admin_console).pack(pady=5)
 
+        ttk.Button(menu, text="ตรวจสอบอัปเดต", width=25, command=self.check_updates).pack(pady=5)
         ttk.Button(menu, text="Logout", width=25, command=self.logout).pack(pady=5)
 
     def _load_api_data_in_background(self):
@@ -2890,6 +2925,7 @@ class App(tk.Tk):
             self.after(0, lambda: messagebox.showerror("Error", f"โหลด API ไม่ได้:\n{e}"))
 
     def _on_api_data_loaded_successfully(self):
+        self.simple_mode_btn.config(state='normal')
         self.trial_mode_btn.config(state='normal')
         self.live_mode_btn.config(state='normal')
 
@@ -2960,9 +2996,37 @@ class App(tk.Tk):
             messagebox.showerror("Error", f"เกิดข้อผิดพลาด: {e}")
             App(self.user_info).mainloop()
 
+    @safe_execute()
+    def open_simple_mode(self):
+        """เปิด Simple Mode"""
+        # ตรวจสอบ role
+        role = self.user_info.get('Role', '').lower()
+        if role == 'normal':
+            messagebox.showerror("ไม่มีสิทธิ์", "โหมดนี้สำหรับสมาชิก VIP ขึ้นไป")
+            return
+        
+        if not self.api_data:
+            messagebox.showwarning("คำเตือน", "API ยังไม่พร้อม โปรดลองใหม่")
+            return
+        try:
+            from simple_mode import SimpleModeWindow
+            self.destroy()  # ปิด window ปัจจุบัน
+            SimpleModeWindow(user_info=self.user_info, api_data=self.api_data).mainloop()
+        except Exception as e:
+            ErrorReporter.report_critical(e, "Failed to open simple mode")
+    
     def open_admin_console(self):
         self.destroy()
         AdminConsoleWindow(self.user_info).mainloop()
+    
+    @safe_execute()
+    def check_updates(self):
+        """ตรวจสอบอัปเดต"""
+        try:
+            from updater import manual_update_check
+            manual_update_check()
+        except Exception as e:
+            ErrorReporter.report_critical(e, "Failed to check updates")
 
     def logout(self):
         if messagebox.askyesno("Logout", "ออกจากระบบใช่ไหม?"):
@@ -3062,6 +3126,9 @@ class LoginWindow(tk.Tk):
         btn_frame = ttk.Frame(self); btn_frame.pack(pady=20)
         ttk.Button(btn_frame, text="Login", command=self.try_login).pack(side=tk.LEFT, padx=6)
         ttk.Button(btn_frame, text="ย้อนกลับ", command=self.on_back).pack(side=tk.LEFT, padx=6)
+        
+        # Load saved credentials if available
+        self._load_saved_credentials()
 
     def try_login(self):
         username = self.username_entry.get().strip()
@@ -3078,6 +3145,17 @@ class LoginWindow(tk.Tk):
             messagebox.showerror("Error", "Username หรือ Password ไม่ถูกต้อง"); return
         self.destroy(); App(user_info).mainloop()
 
+    def _load_saved_credentials(self):
+        """Load saved credentials from config wizard"""
+        try:
+            from config_loader import get_saved_credentials
+            saved_creds = get_saved_credentials()
+            if saved_creds:
+                self.username_entry.insert(0, saved_creds.get('username', ''))
+                self.password_entry.insert(0, saved_creds.get('password', ''))
+        except Exception:
+            pass
+    
     def on_back(self):
         self.destroy(); StartMenu().mainloop()
 
@@ -3107,7 +3185,39 @@ class StartMenu(tk.Tk):
 # ----------------------------- main -----------------------------
 def main():
     setup_config_files()
-    StartMenu().mainloop()
+    
+    # Check for updates on startup (silent)
+    try:
+        from updater import check_updates_on_startup
+        check_updates_on_startup()
+    except Exception:
+        pass
+    
+    # Check if first-time setup is needed
+    try:
+        from config_wizard import should_show_wizard, ConfigWizard
+        from config_loader import get_saved_credentials
+        
+        if should_show_wizard():
+            ConfigWizard().mainloop()
+        else:
+            # Check for saved credentials
+            saved_creds = get_saved_credentials()
+            if saved_creds and saved_creds['username'] and saved_creds['password']:
+                # Auto login with saved credentials
+                try:
+                    user_info = google_sheet_check_login(saved_creds['username'], saved_creds['password'])
+                    if user_info and user_info != "expired":
+                        App(user_info).mainloop()
+                        return
+                except Exception:
+                    pass
+            
+            # Fallback to login screen
+            StartMenu().mainloop()
+    except ImportError:
+        # Fallback if wizard not available
+        StartMenu().mainloop()
 
 if __name__ == "__main__":
     main()

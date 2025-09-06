@@ -1,8 +1,7 @@
-requests==2.32.3
-# Playwright >= 1.48 supports Python 3.13 (pins greenlet >= 3.1.x)
-playwright>=1.48.0
+# Core dependencies for Newbies Bot (minimal set)
+requests>=2.28.0
+nuitka>=1.8.0
 
-# Notes for export/build:
-# - Nuitka is a build tool (not needed at runtime). Use requirements-build.txt
-# - After installing Playwright, run: `playwright install chromium` (or the browsers you need)
-# - If you must stay on Playwright 1.45.x, use Python 3.12 instead of 3.13 to avoid greenlet build errors.
+# Optional - only install if needed
+# playwright>=1.30.0  # Only for trial mode
+# asyncio-compat>=0.1.2  # Only if Python < 3.7
